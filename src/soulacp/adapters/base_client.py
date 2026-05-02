@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import asyncio.proactor_events
+import collections
 import json
 import logging
 import os
@@ -18,6 +19,72 @@ from soulacp.services.fs_service import FSService
 from soulacp.services.terminal_service import TerminalService
 
 logger = logging.getLogger(__name__)
+
+
+class RPCError(Exception):
+    """JSON-RPC error returned by the ACP server.
+
+    Captures full error context (code, message, data) plus invocation
+    metadata (method, msg_id, elapsed_ms) and a tail of subprocess
+    stderr, so opaque "Internal error" log lines can be traced back to
+    a specific RPC and the surrounding subprocess output.
+    """
+
+    def __init__(
+        self,
+        code: int | None,
+        message: str,
+        data: Any = None,
+        method: str | None = None,
+        msg_id: int | None = None,
+        elapsed_ms: float | None = None,
+        stderr_tail: list[str] | None = None,
+        session_id: str | None = None,
+    ) -> None:
+        self.code = code
+        self.message = message
+        self.data = data
+        self.method = method
+        self.msg_id = msg_id
+        self.elapsed_ms = elapsed_ms
+        self.stderr_tail = stderr_tail or []
+        self.session_id = session_id
+        super().__init__(self._format())
+
+    def _format(self) -> str:
+        parts = [f"code={self.code}", f"msg={self.message!r}"]
+        if self.method:
+            parts.append(f"method={self.method}")
+        if self.msg_id is not None:
+            parts.append(f"id={self.msg_id}")
+        if self.elapsed_ms is not None:
+            parts.append(f"elapsed_ms={self.elapsed_ms:.0f}")
+        if self.session_id:
+            parts.append(f"sid={self.session_id}")
+        if self.data is not None:
+            parts.append(f"data={self.data!r}")
+        if self.stderr_tail:
+            tail = "\n  ".join(self.stderr_tail[-10:])
+            parts.append(f"stderr_tail=\n  {tail}")
+        return " | ".join(parts)
+
+    @property
+    def is_retryable(self) -> bool:
+        """JSON-RPC standard codes considered transient."""
+        if self.code is None:
+            return False
+        # -32603 Internal error, -32000~-32099 server errors are usually transient
+        return self.code == -32603 or (-32099 <= self.code <= -32000)
+
+
+class _NoopCM:
+    """Context manager that does nothing — used when OTel is not installed."""
+
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(self, *args: Any) -> bool:
+        return False
 
 
 def _inject_otel_context_into_env(env: dict) -> None:
@@ -138,6 +205,13 @@ class ACPClientBase(ABC):
         # Reader tasks (stored for cancellation on disconnect)
         self._reader_tasks: list[asyncio.Task] = []
 
+        # Inflight RPC tracking (msg_id -> (method, start_ts)) for error context
+        self._inflight: dict[int, tuple[str, float]] = {}
+        # Recent stderr lines (ring buffer for error attribution)
+        self._stderr_buffer: collections.deque[str] = collections.deque(maxlen=50)
+        # Stream error transport — query_stream re-raises after queue drain
+        self._stream_error: Exception | None = None
+
         # Host services for CLI subprocess requests
         cwd = config.cwd or os.getcwd()
         self._fs_service = FSService(cwd)
@@ -234,7 +308,10 @@ class ACPClientBase(ABC):
                 timeout=self.config.timeout_prompt,
             )
         except Exception as e:
-            logger.warning("ACP query error (chunks=%d): %s", len(self._chunks), e)
+            logger.warning(
+                "ACP query error: sid=%s chunks=%d err=%s",
+                self.session_id, len(self._chunks), e,
+            )
             if self._chunks:
                 return "".join(self._chunks)
             raise
@@ -254,11 +331,17 @@ class ACPClientBase(ABC):
         return "".join(self._chunks)
 
     async def query_stream(self, prompt: str) -> AsyncGenerator[str, None]:
-        """Send a prompt and yield response chunks as they arrive."""
+        """Send a prompt and yield response chunks as they arrive.
+
+        On RPC error mid-stream the queued chunks are drained first, then
+        the underlying error (typically RPCError) is raised so callers can
+        distinguish a clean end from a server-side failure.
+        """
         self._chunks = []
         self._complete = asyncio.Event()
         self._stream_queue = asyncio.Queue()
         self._streaming = True
+        self._stream_error = None
         self._last_used = time.time()
 
         async def _send() -> None:
@@ -273,16 +356,19 @@ class ACPClientBase(ABC):
                 )
             except Exception as e:
                 # If the caller invoked disconnect() while the RPC was
-                # in-flight, the failure is expected (subprocess terminated,
-                # ACP server returned 'Internal error' or stdin was closed).
-                # Don't pollute logs at error level. disconnect() sets
-                # self._connected = False atomically as its first action.
+                # in-flight, the failure is expected (subprocess terminated
+                # or stdin was closed). Don't pollute logs at error level.
                 if not self._connected:
                     logger.debug(
                         "ACP RPC ended after disconnect (expected): %s", e
                     )
                 else:
-                    logger.error("ACP stream RPC error: %s", e)
+                    logger.error(
+                        "ACP stream RPC error: sid=%s err=%s",
+                        self.session_id, e,
+                    )
+                # Capture so query_stream re-raises after queue drain.
+                self._stream_error = e
                 if self._stream_queue:
                     self._stream_queue.put_nowait(None)
 
@@ -321,6 +407,11 @@ class ACPClientBase(ABC):
             self._last_used = time.time()
             if not send_task.done():
                 send_task.cancel()
+        # Re-raise after drain so callers distinguish clean end from error.
+        if self._stream_error is not None:
+            err = self._stream_error
+            self._stream_error = None
+            raise err
 
     async def disconnect(self) -> None:
         """Terminate the CLI subprocess and cancel reader tasks."""
@@ -413,7 +504,12 @@ class ACPClientBase(ABC):
         logger.debug("Sent notification: %s", method)
 
     async def _rpc(self, method: str, params: dict, timeout: int | None = None) -> Any:
-        """Send a JSON-RPC request and wait for the response."""
+        """Send a JSON-RPC request and wait for the response.
+
+        If opentelemetry is installed *and* a tracer provider is configured,
+        an ``acp.rpc`` span is emitted with method/session_id/code attrs.
+        Soft-noops (no overhead, no exception) when OTel is absent.
+        """
         if not self.is_connected:
             raise ConnectionError("ACP not connected")
 
@@ -426,25 +522,58 @@ class ACPClientBase(ABC):
 
         self._msg_id += 1
         mid = self._msg_id
-        msg = json.dumps(
-            {
-                "jsonrpc": "2.0",
-                "id": mid,
-                "method": method,
-                "params": params,
-            }
-        )
 
-        self.process.stdin.write((msg + "\n").encode())
-        await self.process.stdin.drain()
+        span_cm = self._otel_rpc_span(method, mid)
+        with span_cm as span:
+            msg = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": mid,
+                    "method": method,
+                    "params": params,
+                }
+            )
 
-        future = asyncio.get_running_loop().create_future()
-        self._pending[mid] = future
+            self.process.stdin.write((msg + "\n").encode())
+            await self.process.stdin.drain()
+
+            future = asyncio.get_running_loop().create_future()
+            self._pending[mid] = future
+            self._inflight[mid] = (method, time.time())
+            try:
+                result = await asyncio.wait_for(future, timeout=timeout)
+            except asyncio.TimeoutError:
+                self._pending.pop(mid, None)
+                self._inflight.pop(mid, None)
+                if span is not None:
+                    span.set_attribute("acp.timeout", True)
+                raise
+            except RPCError as rpc_err:
+                if span is not None:
+                    span.set_attribute("acp.code", rpc_err.code if rpc_err.code is not None else 0)
+                    span.set_attribute("acp.error_message", rpc_err.message[:200])
+                raise
+            finally:
+                self._inflight.pop(mid, None)
+            return result
+
+    def _otel_rpc_span(self, method: str, msg_id: int):
+        """Return an OTel span CM for this RPC, or a no-op CM if unavailable.
+
+        Lazy imports opentelemetry so soulacp has no hard dependency.
+        """
         try:
-            return await asyncio.wait_for(future, timeout=timeout)
-        except asyncio.TimeoutError:
-            self._pending.pop(mid, None)
-            raise
+            from opentelemetry import trace
+        except ImportError:
+            return _NoopCM()
+        tracer = trace.get_tracer("soulacp.rpc")
+        attrs = {"acp.method": method, "acp.msg_id": msg_id}
+        if self.session_id:
+            attrs["acp.session_id"] = self.session_id
+        provider = getattr(self.config, "provider", None)
+        if provider:
+            attrs["acp.provider"] = provider
+        return tracer.start_as_current_span(f"acp.rpc {method}", attributes=attrs)
 
     async def _send_result(self, msg_id: int, result: Any) -> None:
         """Send a JSON-RPC success response back to the subprocess."""
@@ -512,17 +641,19 @@ class ACPClientBase(ABC):
                 self._stream_queue.put_nowait(None)
 
     async def _read_stderr(self) -> None:
-        """Read stderr for debug logging."""
+        """Read stderr for debug logging and ring-buffer retention."""
+        noise = ("AttachConsole", "conpty", "node:internal", "TracingChannel")
         try:
             while self.process and self.process.returncode is None:
                 line = await self.process.stderr.readline()
                 if not line:
                     break
                 text = line.decode("utf-8", errors="replace").strip()
-                if text:
-                    noise = ("AttachConsole", "conpty", "node:internal", "TracingChannel")
-                    if not any(n in text for n in noise):
-                        logger.debug("ACP stderr: %s", text)
+                if not text or any(n in text for n in noise):
+                    continue
+                # Retain for error attribution (RPCError.stderr_tail).
+                self._stderr_buffer.append(text)
+                logger.debug("ACP stderr: %s", text)
         except (ConnectionResetError, OSError, asyncio.CancelledError):
             pass
         except Exception:
@@ -530,9 +661,16 @@ class ACPClientBase(ABC):
 
     @staticmethod
     def _parse_json(text: str) -> dict | None:
-        """Extract a JSON object from a line of text."""
+        """Extract a JSON object from a line of text.
+
+        Lines that look like JSON (start with ``{``) but fail to parse are
+        logged at WARNING — they likely indicate a malformed RPC frame from
+        the server. Lines that contain JSON embedded in other text are
+        logged at DEBUG (banners, progress output, etc.).
+        """
+        looks_like_json = text.startswith("{")
         try:
-            if text.startswith("{"):
+            if looks_like_json:
                 return json.loads(text)
             if "{" in text:
                 start = text.find("{")
@@ -540,8 +678,13 @@ class ACPClientBase(ABC):
                 if start != -1 and end > start:
                     logger.debug("Extracting JSON from non-JSON line: %r", text[:80])
                     return json.loads(text[start : end + 1])
-        except json.JSONDecodeError:
-            logger.debug("Failed to parse JSON from line: %r", text[:80])
+        except json.JSONDecodeError as e:
+            if looks_like_json:
+                logger.warning(
+                    "Malformed JSON-RPC frame: %s | line=%r", e, text[:200],
+                )
+            else:
+                logger.debug("Failed to parse JSON from line: %r", text[:80])
         return None
 
     async def _dispatch(self, msg: dict) -> None:
@@ -565,10 +708,24 @@ class ACPClientBase(ABC):
             mid = msg["id"]
             if mid in self._pending:
                 fut = self._pending.pop(mid)
+                inflight_method, start_ts = self._inflight.pop(mid, (None, None))
                 if "error" in msg:
                     error = msg["error"]
-                    emsg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-                    fut.set_exception(Exception(emsg))
+                    if isinstance(error, dict):
+                        elapsed_ms = (time.time() - start_ts) * 1000 if start_ts else None
+                        rpc_err = RPCError(
+                            code=error.get("code"),
+                            message=error.get("message", ""),
+                            data=error.get("data"),
+                            method=inflight_method,
+                            msg_id=mid,
+                            elapsed_ms=elapsed_ms,
+                            stderr_tail=list(self._stderr_buffer),
+                            session_id=self.session_id,
+                        )
+                        fut.set_exception(rpc_err)
+                    else:
+                        fut.set_exception(Exception(str(error)))
                 else:
                     result = msg.get("result", {})
                     fut.set_result(result)

@@ -6,11 +6,30 @@ import asyncio
 import logging
 from collections.abc import AsyncGenerator
 
+from soulacp.adapters.base_client import RPCError
 from soulacp.config import FALLBACK_MAP, ACPConfig, resolve_client_class, resolve_provider
 from soulacp.pool import ACPConnectionPool
+from soulacp.retry import is_retryable
 from soulacp.session_store import ProviderSessionStore
 
 logger = logging.getLogger(__name__)
+
+
+# Provider-specific overflow markers — server returns these in error.message
+# when the CLI session has run out of context budget. Keep lowercase.
+_OVERFLOW_MARKERS: tuple[str, ...] = (
+    "prompt is too long",
+    "context length",
+    "context window",
+    "too many tokens",
+    "context limit",
+)
+
+
+def is_context_overflow(error: BaseException) -> bool:
+    """Return True if *error* indicates the session ran out of context."""
+    msg = str(error).lower()
+    return any(marker in msg for marker in _OVERFLOW_MARKERS)
 
 
 class ManagedSession:
@@ -153,8 +172,8 @@ class ManagedSession:
                 break
 
             except Exception as exc:
-                # Session rotation on "prompt too long"
-                if not session_rotated and "prompt is too long" in str(exc).lower():
+                # Session rotation on context overflow
+                if not session_rotated and is_context_overflow(exc):
                     logger.warning(
                         "Session context overflow (session=%s). Rotating to fresh session.",
                         session_id,
@@ -166,6 +185,16 @@ class ManagedSession:
                             await self._store.clear(user_id, self.provider)
                         except Exception as e:
                             logger.debug("Session store clear failed for user=%s: %s", user_id, e)
+                    continue
+                # Retry transient RPC errors using code-aware decision
+                if attempt < max_attempts and is_retryable(exc):
+                    delay = min(base_delay * (2 ** (attempt - 1)), 30.0)
+                    code = exc.code if isinstance(exc, RPCError) else None
+                    logger.warning(
+                        "ACP retryable error (attempt %d/%d, code=%s), retrying in %.1fs: %s",
+                        attempt, max_attempts, code, delay, exc,
+                    )
+                    await asyncio.sleep(delay)
                     continue
                 primary_err = exc
                 break

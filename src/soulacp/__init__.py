@@ -16,7 +16,7 @@ Usage::
     asyncio.run(main())
 """
 
-from soulacp.adapters.base_client import ACPClientBase
+from soulacp.adapters.base_client import ACPClientBase, RPCError
 from soulacp.adapters.claude_client import ClaudeACPClient
 from soulacp.adapters.cline_client import ClineACPClient
 from soulacp.adapters.codebuddy_client import CodebuddyACPClient
@@ -140,6 +140,8 @@ __all__ = [
     "find_stakpak_binary",
     # Protocol
     "ACPClient",
+    # Errors
+    "RPCError",
     # Adapters
     "ACPClientBase",
     "ClaudeACPClient",

@@ -24,7 +24,19 @@ RETRYABLE_KEYWORDS: list[str] = [
 
 
 def is_retryable(error: Exception) -> bool:
-    """Check if an error is worth retrying based on keyword matching."""
+    """Check if an error is worth retrying.
+
+    Decision order:
+    1. ``RPCError`` — defer to ``RPCError.is_retryable`` (JSON-RPC code-based).
+    2. Fallback to keyword match on the stringified error.
+    """
+    # Lazy import to avoid circular dependency (adapters import retry-free).
+    try:
+        from soulacp.adapters.base_client import RPCError
+        if isinstance(error, RPCError):
+            return error.is_retryable
+    except ImportError:  # pragma: no cover — package layout change
+        pass
     msg = str(error).lower()
     return any(kw in msg for kw in RETRYABLE_KEYWORDS)
 
