@@ -315,6 +315,10 @@ AIXP Labs develops and maintains the following core projects:
 | [SoulBot](https://soulbot.dev) | AI agent runtime and framework | soulbot.dev |
 | [SoulACP](https://soulacp.dev) | Adapter library — bridging CLI tools and LLM providers (this project) | soulacp.dev |
 
+## ⚠️ Disclaimer
+
+This software is **experimental** and provided for **research and educational purposes only**. Not intended for production use. Use at your own risk. The authors assume no liability for any damages arising from the use of this software. See [LICENSE](LICENSE) for full terms (Apache 2.0).
+
 ## License
 
 [Apache License 2.0](LICENSE) - Copyright 2026 AIXP Labs AIXP.dev | SoulACP.dev

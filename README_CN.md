@@ -315,6 +315,10 @@ AIXP Labs 开发和维护以下核心项目：
 | [SoulBot](https://soulbot.dev) | AI 代理运行时与框架 | soulbot.dev |
 | [SoulACP](https://soulacp.dev) | 适配器库 — 桥接 CLI 工具与 LLM 提供商（本项目） | soulacp.dev |
 
+## ⚠️ 免责声明
+
+本软件为**实验性**软件，仅供**研究和教育用途**。不适用于生产环境。使用风险由用户自行承担。作者对因使用本软件造成的任何损害不承担责任。完整条款见 [LICENSE](LICENSE)（Apache 2.0）。
+
 ## 许可证
 
 [Apache License 2.0](LICENSE) - Copyright 2026 AIXP Labs AIXP.dev | SoulACP.dev
