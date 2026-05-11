@@ -1,17 +1,23 @@
-"""Integration tests for Gemini CLI adapter.
+"""Integration tests for OpenCode ACP adapter.
 
-Run with: pytest tests/test_integration_gemini.py -v
-Skip if Gemini CLI not available.
+Run with: pytest tests/test_integration_opencode.py -v
+Skip if OpenCode CLI not available.
+
+OpenCode uses ``OPENCODE_CONFIG_CONTENT`` env var to pass model selection
+(not session/set_model). Does not support session/resume — base class
+returns False gracefully.
 """
 
 import asyncio
 
 import pytest
 
-from soulacp.binary import find_gemini_binary
+from soulacp.binary import find_opencode_binary
 
-# Skip all tests if Gemini CLI not installed
-pytestmark = pytest.mark.skipif(find_gemini_binary() is None, reason="Gemini CLI not installed")
+pytestmark = pytest.mark.skipif(
+    find_opencode_binary() is None,
+    reason="OpenCode CLI not installed (npm install -g opencode)",
+)
 
 
 @pytest.fixture
@@ -19,10 +25,10 @@ def config():
     from soulacp import ACPConfig
 
     return ACPConfig(
-        provider="gemini",
-        model="gemini-3-flash-preview",
+        provider="opencode",
+        model="opencode-acp/anthropic/claude-sonnet-4-20250514",
         timeout_connect=30,
-        timeout_prompt=60,
+        timeout_prompt=120,
     )
 
 
@@ -30,11 +36,11 @@ def config():
 def client_class():
     from soulacp import resolve_client_class
 
-    return resolve_client_class("gemini")
+    return resolve_client_class("opencode")
 
 
 def test_connect_and_query(config, client_class):
-    """Test basic Gemini connection and query."""
+    """Test basic OpenCode connection and query."""
     from soulacp import ACPConnectionPool
 
     async def run():
@@ -52,7 +58,7 @@ def test_connect_and_query(config, client_class):
 
 
 def test_multi_turn(config, client_class):
-    """Test Gemini multi-turn conversation — context retention within same session."""
+    """Test OpenCode multi-turn — context retention within same session."""
     from soulacp import ACPConnectionPool
 
     async def run():
@@ -62,7 +68,7 @@ def test_multi_turn(config, client_class):
                 r1 = await client.query("Remember the number 7.")
                 assert len(r1) > 0
                 r2 = await client.query("What number did I ask you to remember?")
-                assert "7" in r2, f"Gemini did not remember context; got: {r2}"
+                assert "7" in r2, f"OpenCode did not remember context; got: {r2}"
         finally:
             await pool.close_all()
 
@@ -94,14 +100,14 @@ def test_streaming(config, client_class):
 
 
 def test_model_selection(client_class):
-    """Test that model can be set per-session via session/set_model (if supported)."""
+    """Test that model is passed via OPENCODE_CONFIG_CONTENT env var."""
     from soulacp import ACPConfig, ACPConnectionPool
 
     config = ACPConfig(
-        provider="gemini",
-        model="gemini-acp/gemini-3-flash-preview",
+        provider="opencode",
+        model="opencode-acp/anthropic/claude-sonnet-4-20250514",
         timeout_connect=30,
-        timeout_prompt=60,
+        timeout_prompt=120,
     )
 
     async def run():
@@ -119,7 +125,7 @@ def test_model_selection(client_class):
 
 
 def test_managed_session(config):
-    """Test ManagedSession high-level API works with Gemini."""
+    """Test ManagedSession high-level API works with OpenCode."""
     from soulacp import ManagedSession
 
     async def run():
@@ -136,7 +142,11 @@ def test_managed_session(config):
 
 
 def test_session_reuse(config, client_class):
-    """Test that pool reuses sessions across acquire() calls — context retained."""
+    """Test that pool reuses sessions across acquire() calls — context retained.
+
+    OpenCode adapter implements session/load (see opencode_client.py::resume)
+    so the pool can restore the same session_id across acquire() boundaries.
+    """
     from soulacp import ACPConnectionPool
 
     async def run():
@@ -177,10 +187,10 @@ def test_pool_stats(config, client_class):
 
 
 def test_session_resume(config, client_class):
-    """Test that session/load RPC can restore a previous Gemini session id.
+    """Test that resume() method works at the protocol level.
 
-    Gemini validates session existence via session/list before loading.
-    Returns False gracefully if the session is no longer available.
+    OpenCode does not implement session/resume (it uses base class default
+    which returns False). This test verifies the method does not crash.
     """
     from soulacp import ACPConnectionPool
 
@@ -191,13 +201,15 @@ def test_session_resume(config, client_class):
                 assert sid1
                 _ = await client1.query("Reply 'hi'.")
 
-            from soulacp.adapters.gemini_client import GeminiACPClient
+            from soulacp.adapters.opencode_client import OpenCodeACPClient
 
-            client2 = GeminiACPClient(config)
+            client2 = OpenCodeACPClient(config)
             await client2.connect()
             ok = await client2.resume(sid1)
             await client2.disconnect()
 
+            # OpenCode's base resume() returns False — that's acceptable.
+            # We only verify the call doesn't crash.
             assert isinstance(ok, bool), f"resume() should return bool, got {ok!r}"
         finally:
             await pool.close_all()

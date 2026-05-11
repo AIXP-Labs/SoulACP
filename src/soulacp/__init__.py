@@ -84,6 +84,7 @@ from soulacp.cache import CacheBackend, FileCache, MemoryCache
 from soulacp.config import ACPConfig, resolve_client_class, resolve_provider
 from soulacp.meta import CLIENT_NAME, __version__
 from soulacp.pool import ACPConnectionPool
+from soulacp.registry import AgentInfo, is_installed, list_agents, list_installed_agents
 from soulacp.retry import retry_async
 from soulacp.session import ManagedSession
 from soulacp.session_store import ProviderSessionStore
@@ -105,6 +106,11 @@ __all__ = [
     "resolve_client_class",
     # Pool
     "ACPConnectionPool",
+    # Registry
+    "AgentInfo",
+    "list_agents",
+    "list_installed_agents",
+    "is_installed",
     # Retry
     "retry_async",
     # Binary discovery

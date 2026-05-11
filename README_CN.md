@@ -137,6 +137,44 @@ async def main():
 asyncio.run(main())
 ```
 
+### Codex (OpenAI)
+
+Codex 使用 ChatGPT 登录（不需要 `OPENAI_API_KEY`）—— 先执行 `codex login` 完成登录，
+之后 soulacp 会自动读取 `~/.codex/auth.json`。
+
+```python
+import asyncio
+from soulacp import ManagedSession
+
+async def main():
+    # gpt-5.5 是适配 ChatGPT 登录的模型（ManagedSession 推荐）
+    async with ManagedSession(provider="codex", model="codex-acp/gpt-5.5") as session:
+        response = await session.query("你好！")
+        print(response)
+
+asyncio.run(main())
+```
+
+**环境变量**（soulacp 0.1.5+，全部可选）：
+
+| 变量 | 取值 | 默认 | 作用 |
+|------|------|------|------|
+| `CODEX_REASONING_EFFORT` | `minimal` / `low` / `medium` / `high` / `xhigh` | `medium` | 推理预算 |
+| `CODEX_SANDBOX_MODE` | `read-only` / `workspace-write` / `danger-full-access` | （codex 默认） | 文件系统权限 |
+| `CODEX_APPROVAL_POLICY` | `untrusted` / `on-failure` / `on-request` / `never` | （codex 默认） | 审批提示 |
+| `CODEX_NETWORK_ACCESS` | `true` / `false` | `false` | 在 `workspace-write` 模式下允许联网 |
+
+如果想让 Codex 像 Claude 那样"完全自主"运行（不弹审批、可写工作区、允许联网）：
+
+```bash
+export CODEX_SANDBOX_MODE=workspace-write
+export CODEX_APPROVAL_POLICY=never
+export CODEX_NETWORK_ACCESS=true
+```
+
+如需改用 API key 鉴权而非 ChatGPT 登录，设置 `OPENAI_API_KEY` 并选 API-key 模型
+（如 `codex-acp/gpt-5.5-codex`、`codex-acp/o3`、`codex-acp/o4-mini`）。
+
 ### 多 Agent 协作
 
 ```python

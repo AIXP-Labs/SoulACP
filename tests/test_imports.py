@@ -2,9 +2,15 @@
 
 
 def test_package_import():
+    import re
+
     import soulacp
 
-    assert soulacp.__version__ == "0.1.2"
+    # Just verify the version is a valid SemVer string, not a hardcoded value
+    # (avoid stale assertions when the package version bumps).
+    assert re.match(r"^\d+\.\d+\.\d+", soulacp.__version__), (
+        f"unexpected version format: {soulacp.__version__!r}"
+    )
     # Verify key exports exist rather than hardcoding count
     expected = {"ManagedSession", "ACPConfig", "ACPConnectionPool", "ACPClient", "ACPClientBase"}
     assert expected.issubset(set(soulacp.__all__))

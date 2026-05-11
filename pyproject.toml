@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "soulacp"
-version = "0.1.4"
+version = "0.1.5"
 description = "Python ACP client library — connect to 29 AI coding agents with zero session overhead"
 readme = "README.md"
 license = {text = "Apache-2.0"}

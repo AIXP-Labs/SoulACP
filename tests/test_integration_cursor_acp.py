@@ -62,8 +62,14 @@ def test_multi_turn(config, client_class):
         try:
             async with pool.acquire() as (client, session_id):
                 r1 = await client.query("Remember the number 99.")
+                # Skip gracefully if Cursor backend hit quota / rate limit —
+                # this is not a soulacp bug, just unavailable backend.
+                if "resource_exhausted" in r1.lower() or "rate" in r1.lower():
+                    pytest.skip(f"Cursor backend rate-limited / quota exhausted: {r1[:200]}")
                 assert len(r1) > 0
                 r2 = await client.query("What number did I ask you to remember?")
+                if "resource_exhausted" in r2.lower() or "rate" in r2.lower():
+                    pytest.skip(f"Cursor backend rate-limited / quota exhausted: {r2[:200]}")
                 assert "99" in r2
         finally:
             await pool.close_all()

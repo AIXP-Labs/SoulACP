@@ -319,6 +319,41 @@ class ACPConfig:
     retry_base_delay: float = 1.0
     """Base delay in seconds for exponential backoff (Doc 25)."""
 
+    extra_args: list[str] = field(default_factory=list)
+    """Extra arguments appended verbatim to the CLI subprocess command.
+
+    Useful for adapter-specific tunables not yet exposed as typed fields.
+    Examples:
+      - Codex reasoning effort:
+          extra_args=["-c", 'model_reasoning_effort="high"']
+      - Codex sandbox policy:
+          extra_args=["-c", 'sandbox_permissions=["disk-full-read-access"]']
+      - Any other ``-c key=value`` overrides supported by the target CLI.
+
+    Empty list = no extra args (default).
+    """
+
+    extra_env: dict[str, str] = field(default_factory=dict)
+    """Extra environment variables passed to the CLI subprocess.
+
+    Some adapters do NOT forward CLI flags (e.g. claude-code-acp ignores
+    process.argv), so the only way to tune them from Python code is via
+    environment variables.
+
+    Examples:
+      - Claude Code effort level:
+          extra_env={"CLAUDE_CODE_EFFORT_LEVEL": "high"}
+      - Claude Code disable adaptive thinking (Opus 4.6 / Sonnet 4.6 only):
+          extra_env={"CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1",
+                     "MAX_THINKING_TOKENS": "32000"}
+      - Codex reasoning (env-var route, alternative to -c flag):
+          extra_env={"CODEX_REASONING_EFFORT": "high"}
+      - Any custom env vars your CLI reads.
+
+    Merged into ``os.environ.copy()`` at subprocess launch — user-supplied
+    keys override inherited shell env. Empty dict = no overrides (default).
+    """
+
     def __post_init__(self) -> None:
         if self.pool_size < 1:
             raise ValueError(f"pool_size must be >= 1, got {self.pool_size}")

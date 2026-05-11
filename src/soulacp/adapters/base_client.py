@@ -11,7 +11,7 @@ import os
 import sys
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from typing import Any
 
 from soulacp.config import ACPConfig
@@ -212,6 +212,13 @@ class ACPClientBase(ABC):
         # Stream error transport — query_stream re-raises after queue drain
         self._stream_error: Exception | None = None
 
+        # Optional callback for session/update events that soulacp does not
+        # surface as text chunks (tool_call, tool_call_update, plan, thought,
+        # etc.). Consumers needing tool/plan visibility can register a
+        # callback via ``set_update_callback()`` to observe the raw update
+        # dict without subclassing.
+        self._update_callback: Callable[[dict], None] | None = None
+
         # Host services for CLI subprocess requests
         cwd = config.cwd or os.getcwd()
         self._fs_service = FSService(cwd)
@@ -250,6 +257,12 @@ class ACPClientBase(ABC):
         if not cmd:
             raise FileNotFoundError("CLI binary not found")
 
+        # Append user-supplied extra CLI args (ACPConfig.extra_args).
+        # Adapter-agnostic mechanism for passing ``-c key=value`` overrides
+        # (Codex reasoning_effort, sandbox flags, etc.) without subclassing.
+        if self.config.extra_args:
+            cmd = cmd + list(self.config.extra_args)
+
         env = os.environ.copy()
         env["HEADLESS"] = "true"
         env["FORCE_COLOR"] = "0"
@@ -261,6 +274,13 @@ class ACPClientBase(ABC):
         # Best-effort: silently skipped if opentelemetry is not installed.
         if os.environ.get("SOULBOT_OTEL_PROPAGATE_ACP", "0") == "1":
             _inject_otel_context_into_env(env)
+
+        # Apply user-supplied extra environment variables (ACPConfig.extra_env).
+        # Adapter-agnostic mechanism for passing tunables that the CLI reads
+        # from env rather than argv (e.g. CLAUDE_CODE_EFFORT_LEVEL — Claude
+        # Code does NOT forward CLI flags through claude-code-acp).
+        if self.config.extra_env:
+            env.update(self.config.extra_env)
 
         self.process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -413,8 +433,39 @@ class ACPClientBase(ABC):
             self._stream_error = None
             raise err
 
+    async def cancel(self) -> None:
+        """Send ``session/cancel`` notification to gracefully abort the
+        in-flight prompt without tearing down the subprocess.
+
+        Per ACP 1.0 spec, this is the proper way to interrupt a prompt —
+        ``disconnect()`` is meant for connection teardown, not turn abort.
+        Best-effort: silently ignored if there is no active session or
+        the subprocess is already gone.
+        """
+        if not self.session_id or not self._connected:
+            return
+        try:
+            await self._send_notification(
+                "session/cancel",
+                {"sessionId": self.session_id},
+            )
+        except Exception as e:
+            logger.debug("session/cancel notification failed: %s", e)
+
     async def disconnect(self) -> None:
-        """Terminate the CLI subprocess and cancel reader tasks."""
+        """Terminate the CLI subprocess and cancel reader tasks.
+
+        Sends ``session/cancel`` first as a courtesy so the agent can
+        flush any in-flight work cleanly before the pipe closes.
+        """
+        # Best-effort cancel before tearing down — gives agent a chance
+        # to record a graceful turn end rather than orphaned state.
+        if self._connected and self.session_id:
+            try:
+                await asyncio.wait_for(self.cancel(), timeout=2.0)
+            except Exception:
+                pass
+
         self._connected = False
 
         # Cancel reader tasks first to avoid pipe warnings
@@ -754,9 +805,46 @@ class ACPClientBase(ABC):
     # Stream update handling
     # ------------------------------------------------------------------
 
+    def set_update_callback(self, callback: Callable[[dict], None] | None) -> None:
+        """Register a callback for raw ``session/update`` events.
+
+        The callback receives the ``update`` dict for EVERY update
+        (text chunks, tool_call, tool_call_update, plan, thought, ...)
+        in addition to soulacp's built-in text-chunk handling. Pass
+        ``None`` to clear.
+
+        Use this when you need observability beyond plain text replies
+        (e.g. SoulBot OTel + AISOP execution tracking tool invocations).
+        Callback errors are swallowed (logged at debug) so faulty
+        consumers can't break streaming.
+        """
+        self._update_callback = callback
+
     def _handle_stream_update(self, msg: dict) -> None:
-        """Process session/update notifications for streaming chunks."""
+        """Process session/update notifications for streaming chunks.
+
+        Per ACP 1.0 spec, session/update ``updates`` array can contain:
+          - text chunks (handled here as agent_message_chunk / *_delta)
+          - tool calls + tool call status updates  (NOT exposed as text;
+            consumers needing tool visibility should register a callback
+            via ``set_update_callback()`` to observe the raw update dict)
+          - agent plans / thoughts  (same — accessible via callback only)
+
+        This is a deliberate scope choice — soulacp is a "give me the
+        text reply" adapter library, not an agent observability surface.
+        Tool / plan visibility belongs to a higher layer (e.g. SoulBot
+        OTel + AISOP execution).
+        """
         update = msg.get("params", {}).get("update", {})
+
+        # Invoke user-registered callback BEFORE any internal handling
+        # so consumers see all updates in order (text + non-text alike).
+        if self._update_callback is not None:
+            try:
+                self._update_callback(update)
+            except Exception as e:
+                logger.debug("update callback raised: %s", e)
+
         utype = update.get("sessionUpdate")
 
         if utype == "agent_message_chunk":

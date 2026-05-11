@@ -126,6 +126,30 @@ class OpenCodeACPClient(ACPClientBase):
         if not self.session_id:
             raise ConnectionError("session/new did not return sessionId")
 
+    async def resume(self, session_id: str) -> bool:
+        """Resume a previous OpenCode session via session/load.
+
+        OpenCode supports session/load in ACP 1.0 protocol. Returns True
+        on success, False if the session can't be restored (e.g. expired
+        or unknown to the backend). Graceful — failures don't raise.
+        """
+        try:
+            await self._rpc(
+                "session/load",
+                {
+                    "sessionId": session_id,
+                    "cwd": self.config.cwd or os.getcwd(),
+                    "mcpServers": [],
+                },
+                timeout=self.config.timeout_connect,
+            )
+            self.session_id = session_id
+            logger.info("OpenCode session resumed: %s", session_id)
+            return True
+        except Exception as e:
+            logger.debug("OpenCode session resume failed for %s: %s", session_id, e)
+            return False
+
     async def _rpc(self, method: str, params: dict, timeout: int | None = None) -> Any:
         """Send JSON-RPC via synchronous stdin write."""
         if not self._connected or not self._popen:

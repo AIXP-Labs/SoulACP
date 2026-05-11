@@ -17,6 +17,18 @@ class ClaudeACPClient(ACPClientBase):
     """ACP client for Claude Code CLI.
 
     Handles Claude-specific initialization, session creation, and resume.
+
+    **Effort level**: defaults to ``auto`` (adaptive thinking — Claude
+    Opus 4.7's recommended behavior; model decides depth per step).
+    Override via ``ACPConfig.extra_env``::
+
+        ACPConfig(provider="claude", model="claude-acp/opus",
+                  extra_env={"CLAUDE_CODE_EFFORT_LEVEL": "high"})
+
+    Levels: ``low`` | ``medium`` | ``high`` | ``xhigh`` | ``max`` | ``auto``.
+    (``--effort`` CLI flag is NOT honored — ``claude-code-acp`` does not
+    forward process.argv to the underlying claude binary; env var is the
+    only reliable control surface.)
     """
 
     def __init__(self, config: ACPConfig) -> None:

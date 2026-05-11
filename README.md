@@ -137,6 +137,44 @@ async def main():
 asyncio.run(main())
 ```
 
+### Codex (OpenAI)
+
+Codex uses ChatGPT login (no `OPENAI_API_KEY` required) — run `codex login` once,
+then soulacp picks up `~/.codex/auth.json` automatically.
+
+```python
+import asyncio
+from soulacp import ManagedSession
+
+async def main():
+    # gpt-5.5 is the ChatGPT-auth friendly model (recommended for ManagedSession)
+    async with ManagedSession(provider="codex", model="codex-acp/gpt-5.5") as session:
+        response = await session.query("Hello!")
+        print(response)
+
+asyncio.run(main())
+```
+
+**Environment variables** (soulacp 0.1.5+, all optional):
+
+| Variable | Values | Default | Purpose |
+|----------|--------|---------|---------|
+| `CODEX_REASONING_EFFORT` | `minimal` / `low` / `medium` / `high` / `xhigh` | `medium` | Reasoning budget |
+| `CODEX_SANDBOX_MODE` | `read-only` / `workspace-write` / `danger-full-access` | (codex default) | File-system permission |
+| `CODEX_APPROVAL_POLICY` | `untrusted` / `on-failure` / `on-request` / `never` | (codex default) | Approval prompts |
+| `CODEX_NETWORK_ACCESS` | `true` / `false` | `false` | Allow network in `workspace-write` |
+
+To match Claude's "full autonomy" mode (no prompts, can write within workspace, network on):
+
+```bash
+export CODEX_SANDBOX_MODE=workspace-write
+export CODEX_APPROVAL_POLICY=never
+export CODEX_NETWORK_ACCESS=true
+```
+
+For API-key auth instead of ChatGPT, set `OPENAI_API_KEY` and pick an API-keyed model
+(e.g. `codex-acp/gpt-5.5-codex`, `codex-acp/o3`, `codex-acp/o4-mini`).
+
 ### Multi-Agent
 
 ```python
