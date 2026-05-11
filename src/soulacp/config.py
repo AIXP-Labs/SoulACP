@@ -289,8 +289,8 @@ class ACPConfig:
     pool_size: int = 10
     """Maximum number of idle connections kept in the pool."""
 
-    pool_idle_timeout: int = 1800
-    """Idle timeout in seconds before a pooled connection is closed (30min)."""
+    pool_idle_timeout: int = 2592000
+    """Idle timeout in seconds before a pooled connection is closed (30 days)."""
 
     pool_keepalive_interval: int = 300
     """Keepalive check interval in seconds (5min). 0 = disabled."""
@@ -298,11 +298,11 @@ class ACPConfig:
     timeout_connect: int = 30
     """Timeout in seconds for subprocess startup + initialize."""
 
-    timeout_prompt: int = 3600
-    """Timeout in seconds for a single prompt/response cycle (60min)."""
+    timeout_prompt: int = 2592000
+    """Timeout in seconds for a single prompt/response cycle (30 days)."""
 
-    timeout_stream: int = 3600
-    """Timeout in seconds for individual stream chunks (60min)."""
+    timeout_stream: int = 2592000
+    """Timeout in seconds for individual stream chunks (30 days)."""
 
     cwd: str = field(default_factory=os.getcwd)
     """Working directory for the CLI subprocess."""

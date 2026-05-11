@@ -235,7 +235,9 @@ async with pool.acquire(session_id=sid) as (client, sid2):
 | `ACP_MODEL` | — | 模型标识 |
 | `ACP_POOL_SIZE` | 10 | 连接池最大连接数 |
 | `ACP_TIMEOUT_CONNECT` | 30 | 连接超时（秒） |
-| `ACP_TIMEOUT_PROMPT` | 3600 | Prompt 超时（秒） |
+| `ACP_TIMEOUT_PROMPT` | 2592000 | Prompt 超时（秒，30 天） |
+| `ACP_TIMEOUT_STREAM` | 2592000 | Stream chunk 超时（秒，30 天） |
+| `ACP_POOL_IDLE_TIMEOUT` | 2592000 | 连接池空闲超时（秒，30 天） |
 | `ACP_AUTO_APPROVE` | true | 自动批准工具权限 |
 | `ACP_MAX_RETRIES` | 3 | 最大重试次数 |
 

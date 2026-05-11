@@ -235,7 +235,9 @@ async with pool.acquire(session_id=sid) as (client, sid2):
 | `ACP_MODEL` | — | Model identifier |
 | `ACP_POOL_SIZE` | 10 | Max pool connections |
 | `ACP_TIMEOUT_CONNECT` | 30 | Connection timeout (seconds) |
-| `ACP_TIMEOUT_PROMPT` | 3600 | Prompt timeout (seconds) |
+| `ACP_TIMEOUT_PROMPT` | 2592000 | Prompt timeout (seconds, 30 days) |
+| `ACP_TIMEOUT_STREAM` | 2592000 | Stream chunk timeout (seconds, 30 days) |
+| `ACP_POOL_IDLE_TIMEOUT` | 2592000 | Pool idle timeout (seconds, 30 days) |
 | `ACP_AUTO_APPROVE` | true | Auto-approve tool permissions |
 | `ACP_MAX_RETRIES` | 3 | Max retry attempts |
 
