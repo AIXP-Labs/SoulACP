@@ -5,6 +5,60 @@ All notable changes to soulacp are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2026-05-27
+
+### Fixed
+- **Subprocess fatal-exit is retryable again (corrects 0.1.6 fail-fast).**
+  `RPCError.is_retryable` no longer returns `False` for fatal subprocess exit
+  codes (`0xC0000409` V8 OOM etc.). The 0.1.6 fail-fast was premature: a retry
+  does NOT replay the same prompt in the dead process — it reconnects a **fresh**
+  Claude Code subprocess (clean heap) and node_engine crash-recovery **resumes
+  from the last completed node**, so retries usually succeed (observed in
+  `docs/plan18/03`, contradicting 0.1.6's untested "re-crashes deterministically"
+  assumption). 0.1.6 also relied on an engine-side A2 降载-retry fallback that was
+  **never built** (`plan20/07 §7`) — leaving crashes with no safety net, so the
+  whole pipeline terminated instead of resuming. `_is_fatal_subprocess_exit` is
+  retained **for observability only** (retry logs surface crash-driven retries),
+  not to block the retry.
+
+### Kept from 0.1.6
+- `NODE_OPTIONS=--max-old-space-size=8192` default heap (reduces crash *frequency*).
+- Full `RPCError` context (code/message/data/stderr_tail) — the diagnostic detail 0.1.5 lacked.
+
+### Migration — 0.1.6 → 0.1.7
+- Backward-compatible. Fatal subprocess crashes retry 3× again (fresh process +
+  resume, as in 0.1.5) **but now with 0.1.6's diagnostic detail**. True fail-fast
+  on crashes should wait until the engine-side A2 (降载 retry) safety net exists.
+
+## [0.1.6] - 2026-05-26
+
+### Fixed
+- **Subprocess fatal-exit no longer retried (deterministic crash).**
+  `RPCError.is_retryable` now returns `False` when `data.details` reports a
+  fatal subprocess exit code, even though the ACP server wraps it as `-32603`
+  Internal error. A fatal exit (V8 OOM, segfault, fast-fail) is deterministic —
+  retrying the same `session/prompt` re-crashes, wasting ~N × the (often
+  multi-minute) call. Detected codes: `3221226505`/`0xC0000409`
+  (Windows STATUS_STACK_BUFFER_OVERRUN / `__fastfail`, common V8 OOM),
+  `3221225477`/`0xC0000005` (access violation), POSIX `134`/`137`/`139`
+  (SIGABRT / SIGKILL OOM-killer / SIGSEGV). Plain `-32603` (no fatal exit in
+  details) and `-32000`~`-32099` server errors remain retryable as before.
+
+### Changed
+- **Claude Code subprocess gets a larger default V8 heap.**
+  `ClaudeACPClient` now injects `NODE_OPTIONS=--max-old-space-size=8192` into the
+  subprocess environment **only when the caller hasn't set `NODE_OPTIONS`**
+  (caller override always wins). Mitigates long-session OOM crashes
+  (exit `0xC0000409`) on multi-minute `session/prompt` calls. Override or
+  disable via `ACPConfig(extra_env={"NODE_OPTIONS": "..."})`.
+
+### Migration — 0.1.5 → 0.1.6
+- Backward-compatible. No API changes. Two behavior changes:
+  (1) fatal subprocess crashes now fail fast instead of retrying 3× — if you
+  relied on the old retry-on-crash behavior, note it never succeeded anyway;
+  (2) Claude subprocesses default to 8GB Node heap — set your own
+  `NODE_OPTIONS` in `extra_env` to override.
+
 ## [0.1.5] - 2026-05-11
 
 ### Changed

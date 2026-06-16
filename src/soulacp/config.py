@@ -319,6 +319,19 @@ class ACPConfig:
     retry_base_delay: float = 1.0
     """Base delay in seconds for exponential backoff (Doc 25)."""
 
+    max_turns: int = 100000
+    """Max agentic turns per ACP session.
+
+    Forwarded by the claude adapter as ``_meta.claudeCode.options.maxTurns`` on
+    session/new + session/resume. The Claude Agent SDK otherwise defaults to a
+    low per-session turn cap (~100) that long per-node AIAP pipelines exceed
+    mid-run (surfaces as SDK ``error_max_turns`` -> ACP ``max_turn_requests``).
+    100_000 clears any legitimate bounded pipeline (~hundreds of turns) by a
+    huge margin while still stopping a true runaway loop at 100k rather than
+    spinning unbounded. Override via ``ACP_MAX_TURNS``.
+    Only the claude adapter consumes this; other adapters ignore it.
+    """
+
     extra_args: list[str] = field(default_factory=list)
     """Extra arguments appended verbatim to the CLI subprocess command.
 
@@ -436,6 +449,10 @@ class ACPConfig:
         v = _env("RETRY_BASE_DELAY")
         if v:
             kwargs["retry_base_delay"] = float(v)
+
+        v = _env("MAX_TURNS")
+        if v:
+            kwargs["max_turns"] = int(v)
 
         kwargs.update(overrides)
         return cls(**kwargs)

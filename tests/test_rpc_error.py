@@ -93,6 +93,24 @@ def test_rpc_error_not_retryable_codes(code):
     assert not RPCError(code=code, message="x").is_retryable
 
 
+def test_fatal_subprocess_exit_is_retryable_0_1_7():
+    """0.1.7: a fatal subprocess exit (0xC0000409 V8 OOM) is retryable AGAIN.
+
+    Retry does not replay the dead process — it reconnects a fresh subprocess
+    + node_engine resumes from the last completed node, so it usually recovers.
+    _is_fatal_subprocess_exit is retained for observability, NOT to block retry.
+    """
+    from soulacp import RPCError
+
+    err = RPCError(
+        code=-32603,
+        message="Internal error",
+        data={"details": "Claude Code process exited with code 3221226505"},
+    )
+    assert err.is_retryable                 # 0.1.7: fatal exit no longer blocks retry
+    assert err._is_fatal_subprocess_exit()  # still detectable for observability/logs
+
+
 # ---------------------------------------------------------------------------
 # retry.is_retryable integration with RPCError
 # ---------------------------------------------------------------------------

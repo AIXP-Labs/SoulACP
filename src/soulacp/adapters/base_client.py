@@ -68,12 +68,49 @@ class RPCError(Exception):
             parts.append(f"stderr_tail=\n  {tail}")
         return " | ".join(parts)
 
+    # Subprocess fatal-exit codes (OOM / corruption / fast-fail).
+    # 0.1.7: used ONLY for observability (label crash-driven retries), NOT to
+    # block retry — a retry reconnects a fresh subprocess + resumes from the last
+    # completed node, so it usually recovers. Matched against data.details
+    # "exited with code <N>".
+    _FATAL_SUBPROCESS_EXIT_CODES = (
+        "3221226505", "0xc0000409",   # Windows STATUS_STACK_BUFFER_OVERRUN / __fastfail (common V8 OOM)
+        "3221225477", "0xc0000005",   # Windows access violation
+        "134", "137", "139",          # POSIX SIGABRT(abort/OOM) / SIGKILL(OOM killer) / SIGSEGV
+    )
+
+    def _is_fatal_subprocess_exit(self) -> bool:
+        """True if data.details reports a fatal subprocess exit code.
+
+        0.1.7: observability helper only — a fatal exit no longer blocks retry
+        (retry reconnects a fresh subprocess + node_engine resumes from the last
+        completed node). Callers may use this to label/log crash-driven retries.
+        """
+        if not isinstance(self.data, dict):
+            return False
+        details = str(self.data.get("details", "")).lower()
+        if "exited with code" in details or "process exited" in details:
+            return any(c in details for c in self._FATAL_SUBPROCESS_EXIT_CODES)
+        return False
+
     @property
     def is_retryable(self) -> bool:
-        """JSON-RPC standard codes considered transient."""
+        """JSON-RPC standard codes considered transient.
+
+        0.1.7 — subprocess fatal-exit (e.g. 0xC0000409 V8 OOM) is AGAIN retryable.
+        A retry does NOT replay the same prompt in the dead process: it reconnects
+        a FRESH Claude Code subprocess (clean heap) and node_engine crash-recovery
+        resumes from the last completed node, so the retry usually succeeds
+        (observed in docs/plan18/03). The 0.1.6 fail-fast assumed "same prompt
+        re-crashes" and relied on an engine-side A2 降载-retry fallback that was
+        never built (plan20/07 §7) — leaving crashes with no safety net.
+        ``_is_fatal_subprocess_exit`` is kept ONLY for observability (retry logs
+        surface that it was a crash-driven retry), NOT to block the retry.
+        """
         if self.code is None:
             return False
-        # -32603 Internal error, -32000~-32099 server errors are usually transient
+        # -32603 Internal error + -32000~-32099 server errors are transient.
+        # Fatal subprocess exits are included: fresh-process + resume retry recovers them.
         return self.code == -32603 or (-32099 <= self.code <= -32000)
 
 

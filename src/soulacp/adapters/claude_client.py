@@ -35,6 +35,13 @@ class ClaudeACPClient(ACPClientBase):
         super().__init__(config)
         self._binary: str | None = None
         self._is_acp: bool = False
+        # v0.1.6 (heap retained through 0.1.7): give the Claude Code (Node) subprocess a larger V8 heap by
+        # default to prevent long-session OOM crashes (exit code 3221226505 /
+        # 0xC0000409 STATUS_STACK_BUFFER_OVERRUN). Only set when the caller
+        # hasn't specified NODE_OPTIONS — caller override always wins.
+        if self.config.extra_env is None:
+            self.config.extra_env = {}
+        self.config.extra_env.setdefault("NODE_OPTIONS", "--max-old-space-size=8192")
 
     def _get_acp_command(self) -> list[str]:
         """Return command to start Claude CLI in ACP mode."""
@@ -67,6 +74,10 @@ class ClaudeACPClient(ACPClientBase):
             {
                 "cwd": self.config.cwd or os.getcwd(),
                 "mcpServers": [],
+                # Raise the Claude Agent SDK per-session turn cap (default ~100,
+                # which long per-node AIAP pipelines exceed mid-run). claude-code-acp
+                # forwards params._meta.claudeCode.options into the SDK query options.
+                "_meta": {"claudeCode": {"options": {"maxTurns": self.config.max_turns}}},
             },
             timeout=self.config.timeout_connect,
         )
@@ -100,6 +111,9 @@ class ClaudeACPClient(ACPClientBase):
                 {
                     "sessionId": session_id,
                     "cwd": self.config.cwd or os.getcwd(),
+                    # Same turn-cap raise on resume — resumed sessions otherwise
+                    # fall back to the SDK default (~100).
+                    "_meta": {"claudeCode": {"options": {"maxTurns": self.config.max_turns}}},
                 },
                 timeout=self.config.timeout_connect,
             )
