@@ -845,4 +845,4 @@ Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.0. www.sou
   *Human Sovereignty and Wellbeing is Axiom 0, requiring no hypocritical human-in-the-loop.*
 - **No w.a.s.h, Real h.s.a.w.**
 - **人非蝼蚁，人为道。**
-- **We are not beggars, we the people.**
+- **We are not beggars. We the People.**

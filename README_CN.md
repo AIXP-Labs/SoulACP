@@ -786,4 +786,4 @@ Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.0. www.sou
   *人类主权与福祉是第零公理，无需虚伪的人机协同。*
 - **No w.a.s.h, Real h.s.a.w.**
 - **人非蝼蚁，人为道。**
-- **We are not beggars, we the people.**
+- **We are not beggars. We the People.**
