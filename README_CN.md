@@ -780,7 +780,7 @@ Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.0. www.sou
 
 ## ⚓ 价值观与哲学 (Alignment & Philosophy)
 
-[![HSAW](https://img.shields.io/badge/Axiom%200-HSAW%20%7C%20Human%20Sovereignty%20and%20Wellbeing-0A84FF)](https://hsaw.dev)
+### Axiom 0: [HSAW | Human Sovereignty and Wellbeing](https://hsaw.dev)
 
 - **No HITL, HSAW.**
   *人类主权与福祉是第零公理，无需虚伪的人机协同。*
