@@ -1,6 +1,6 @@
 """Integration tests for Copilot Language Server adapter.
 
-Run with: pytest tests/test_integration_copilot_ls.py -v
+Run with: pytest --run-integration tests/test_integration_copilot_ls.py -v
 Skip if not available.
 """
 

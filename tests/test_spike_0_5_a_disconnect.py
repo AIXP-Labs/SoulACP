@@ -16,13 +16,14 @@ mid-stream 场景下的实际语义:
 结果写入 docs/plan14/51a-disconnect-behavior.md (§4.2.1 止损矩阵判决)。
 
 Run:
-    pytest tests/test_spike_0_5_a_disconnect.py -v -s
+    pytest --run-integration tests/test_spike_0_5_a_disconnect.py -v -s
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
+from contextlib import suppress
 from dataclasses import dataclass, field
 
 import pytest
@@ -46,7 +47,8 @@ class SpikeAResult:
     bytes_before: int = 0
     bytes_after: int = 0
     disconnect_elapsed_s: float = 0.0
-    task_end: str = "unknown"          # "completed" / "cancelled" / "exception:<Name>" / "hang"
+    task_end: str = "unknown"  # "completed" / "cancelled" / "exception:<Name>" / "hang"
+    midstream_confirmed: bool = False
     reconnect_ok: bool | None = None
     reconnect_err: str | None = None
     notes: list[str] = field(default_factory=list)
@@ -55,39 +57,31 @@ class SpikeAResult:
 PROVIDERS = [
     pytest.param(
         "claude",
-        "claude-sonnet-4-20250514",
+        "claude-acp/sonnet",
         find_claude_binary,
         id="claude",
-        marks=pytest.mark.skipif(
-            find_claude_binary() is None, reason="Claude Code CLI not installed"
-        ),
+        marks=pytest.mark.skipif(find_claude_binary() is None, reason="Claude Code CLI not installed"),
     ),
     pytest.param(
         "gemini",
         "gemini-2.5-pro",
         find_gemini_binary,
         id="gemini",
-        marks=pytest.mark.skipif(
-            find_gemini_binary() is None, reason="Gemini CLI not installed"
-        ),
+        marks=pytest.mark.skipif(find_gemini_binary() is None, reason="Gemini CLI not installed"),
     ),
     pytest.param(
         "opencode",
         "anthropic/claude-sonnet-4-20250514",
         find_opencode_binary,
         id="opencode",
-        marks=pytest.mark.skipif(
-            find_opencode_binary() is None, reason="OpenCode CLI not installed"
-        ),
+        marks=pytest.mark.skipif(find_opencode_binary() is None, reason="OpenCode CLI not installed"),
     ),
     pytest.param(
         "codex",
         "codex-acp/gpt-5.5",
         find_codex_binary,
         id="codex",
-        marks=pytest.mark.skipif(
-            find_codex_binary() is None, reason="codex-acp not installed"
-        ),
+        marks=pytest.mark.skipif(find_codex_binary() is None, reason="codex-acp not installed"),
     ),
 ]
 
@@ -153,11 +147,15 @@ async def _run_spike_a(provider: str, model: str) -> SpikeAResult:
                 first_chunk_wait_s = time.monotonic() - t_first
             except asyncio.TimeoutError:
                 first_chunk_wait_s = time.monotonic() - t_first
-                result.notes.append(f"first chunk TIMEOUT > 60s (stream 未启动)")
+                result.notes.append("first chunk TIMEOUT > 60s (stream 未启动)")
                 # 继续跑 disconnect 看行为
 
             # 首 chunk 后额外等 200ms 保证已在 mid-stream
             await asyncio.sleep(0.2)
+            result.midstream_confirmed = not task.done()
+            if not result.midstream_confirmed:
+                result.task_end = await task
+                result.notes.append("stream ended before disconnect; not a mid-stream sample")
 
             # 关键:mid-stream disconnect
             t0 = time.monotonic()
@@ -171,28 +169,25 @@ async def _run_spike_a(provider: str, model: str) -> SpikeAResult:
             disconnect_done.set()
 
             # 等 stream task 终止,5s 超时
-            try:
-                end_reason = await asyncio.wait_for(task, timeout=5.0)
-                result.task_end = end_reason or "completed"
-            except asyncio.TimeoutError:
-                result.task_end = "hang"
-                task.cancel()
+            if not task.done() or result.task_end == "unknown":
                 try:
-                    await task
-                except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                    pass
+                    end_reason = await asyncio.wait_for(task, timeout=5.0)
+                    result.task_end = end_reason or "completed"
+                except asyncio.TimeoutError:
+                    result.task_end = "hang"
+                    task.cancel()
+                    with suppress(asyncio.CancelledError, Exception):
+                        await task
     except Exception as exc:  # noqa: BLE001
         result.notes.append(f"pool.acquire exception: {type(exc).__name__}: {exc}")
 
     result.notes.append(f"first_chunk_wait={first_chunk_wait_s:.2f}s")
 
-    # 重连测试:新开 acquire 看是否 graceful
+    # 重连测试只验证新 transport/session 的可用性。供应商额度或模型拒绝
+    # 不属于 disconnect/pool 生命周期故障,不应通过第二次 prompt 混入判决。
     try:
         async with pool.acquire() as (client2, sid2):
-            resp = await asyncio.wait_for(
-                client2.query("Say 'OK' in one word."), timeout=60.0
-            )
-            result.reconnect_ok = bool(resp and len(resp) > 0)
+            result.reconnect_ok = bool(sid2 and await asyncio.wait_for(client2.ping(), timeout=5.0))
     except Exception as exc:  # noqa: BLE001
         result.reconnect_ok = False
         result.reconnect_err = f"{type(exc).__name__}: {exc}"
@@ -202,9 +197,7 @@ async def _run_spike_a(provider: str, model: str) -> SpikeAResult:
 
 
 @pytest.mark.parametrize("provider,model,binary_finder", PROVIDERS)
-def test_midstream_disconnect(
-    provider: str, model: str, binary_finder, request: pytest.FixtureRequest
-) -> None:
+def test_midstream_disconnect(provider: str, model: str, binary_finder, request: pytest.FixtureRequest) -> None:
     """Spike 0.5-A 核心测试:mid-stream disconnect 行为."""
 
     result = asyncio.run(_run_spike_a(provider, model))
@@ -216,6 +209,7 @@ def test_midstream_disconnect(
     print(f"  chunks before disconnect : {result.chunks_before} ({result.bytes_before} bytes)")
     print(f"  chunks after disconnect  : {result.chunks_after} ({result.bytes_after} bytes)")
     print(f"  disconnect elapsed       : {result.disconnect_elapsed_s:.3f}s")
+    print(f"  mid-stream confirmed     : {result.midstream_confirmed}")
     print(f"  stream task end          : {result.task_end}")
     print(f"  reconnect ok             : {result.reconnect_ok} {result.reconnect_err or ''}")
     if result.notes:
@@ -230,18 +224,16 @@ def test_midstream_disconnect(
             f"[{provider}] stream did not start within 60s — backend slow / "
             f"resource contention from prior tests (notes: {result.notes})"
         )
+    if not result.midstream_confirmed:
+        pytest.skip(f"[{provider}] stream ended before disconnect; no mid-stream behavior was exercised")
     # 2. disconnect 不 hang
     assert result.disconnect_elapsed_s < 10.0, (
         f"[{provider}] disconnect() 耗时 {result.disconnect_elapsed_s:.2f}s >= 10s (hang)"
     )
     # 3. stream task 能终止
-    assert result.task_end != "hang", (
-        f"[{provider}] stream task 未能在 5s 内终止"
-    )
+    assert result.task_end != "hang", f"[{provider}] stream task 未能在 5s 内终止"
     # 4. 重连可用
-    assert result.reconnect_ok is True, (
-        f"[{provider}] 重连失败: {result.reconnect_err}"
-    )
+    assert result.reconnect_ok is True, f"[{provider}] 重连失败: {result.reconnect_err}"
 
     # 软断言:disconnect 后应尽量少 chunk(graceful)
     # 这里不 hard fail,只是记录 "provider 是否 graceful"

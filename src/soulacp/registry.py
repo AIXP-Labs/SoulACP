@@ -1,13 +1,15 @@
-"""ACP agent registry helpers.
+"""Agent-integration registry helpers.
 
-Exposes the list of ACP-compatible agents that soulacp can adapt to,
+Exposes the list of agent integrations that soulacp can adapt to,
 and a small helper to check which CLIs are installed locally.
 
-The full remote ACP Registry (https://acp.zed.dev/registry) is not yet
-queried; this module currently returns the static set of providers that
-have adapters in ``soulacp.adapters``. Remote sync may be added later
-without changing the public API of this module.
+The remote ACP Registry index at
+https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json is not
+queried at runtime; this module returns the static set of providers that have
+adapters in ``soulacp.adapters``. Remote sync may be added later without
+changing this module's public API.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -47,7 +49,7 @@ from soulacp.binary import (
 
 @dataclass(frozen=True)
 class AgentInfo:
-    """Static info about an ACP-compatible agent supported by soulacp."""
+    """Static info about an agent integration supported by soulacp."""
 
     name: str
     """Short canonical name (e.g. ``"claude"`` / ``"codex"``)."""
@@ -64,43 +66,71 @@ class AgentInfo:
 
 
 _AGENTS: tuple[AgentInfo, ...] = (
-    AgentInfo("claude", "claude-acp/",
-              "npm install -g @anthropic-ai/claude-code",
-              "Login: claude login (ChatGPT/Pro/Max account or API key)"),
-    AgentInfo("codex", "codex-acp/",
-              "npm install -g @zed-industries/codex-acp",
-              "Login: codex login (ChatGPT account); model: gpt-5.5"),
-    AgentInfo("gemini", "gemini-acp/",
-              "npm install -g @google/gemini-cli",
-              "Login: gemini login"),
-    AgentInfo("opencode", "opencode-acp/",
-              "npm install -g opencode",
-              "No login required (free models); supports many providers"),
+    AgentInfo(
+        "claude",
+        "claude-acp/",
+        "npm install -g @agentclientprotocol/claude-agent-acp",
+        "Auth: Claude Code/Anthropic credentials; legacy claude-code-acp remains supported",
+    ),
+    AgentInfo(
+        "codex",
+        "codex-acp/",
+        "npm install -g @agentclientprotocol/codex-acp",
+        "Login: codex login (ChatGPT account); example model: gpt-5.5",
+    ),
+    AgentInfo(
+        "gemini",
+        "gemini-acp/",
+        "npm install -g @google/gemini-cli",
+        "Auth: Enterprise/Google Cloud/paid API; personal OAuth moved to Antigravity",
+    ),
+    AgentInfo(
+        "opencode",
+        "opencode-acp/",
+        "Install from https://opencode.ai",
+        "No login required for configured free models; supports many providers",
+    ),
     AgentInfo("openclaw", "openclaw/", "npm install -g openclaw", ""),
     AgentInfo("cursor", "cursor-acp/", "Install Cursor IDE", ""),
-    AgentInfo("kimi", "kimi-acp/", "npm install -g kimi-cli", ""),
-    AgentInfo("qwen", "qwen-acp/", "npm install -g qwen-code", ""),
-    AgentInfo("codebuddy", "codebuddy-acp/", "Install codebuddy", ""),
-    AgentInfo("cline", "cline-acp/", "Install cline", ""),
-    AgentInfo("copilot", "copilot-acp/", "Install GitHub Copilot CLI", ""),
-    AgentInfo("copilot-ls", "copilot-ls/", "Install Copilot LS", ""),
-    AgentInfo("amp", "amp-acp/", "Install Sourcegraph Amp", ""),
-    AgentInfo("auggie", "auggie-acp/", "Install Auggie", ""),
-    AgentInfo("autohand", "autohand-acp/", "Install Autohand", ""),
-    AgentInfo("corust", "corust-acp/", "Install corust", ""),
-    AgentInfo("crow", "crow-acp/", "Install crow", ""),
-    AgentInfo("deepagents", "deepagents-acp/", "Install deepagents", ""),
-    AgentInfo("droid", "droid-acp/", "Install droid", ""),
-    AgentInfo("fastagent", "fastagent-acp/", "Install fast-agent", ""),
-    AgentInfo("goose", "goose-acp/", "Install goose", ""),
-    AgentInfo("junie", "junie-acp/", "Install JetBrains Junie", ""),
-    AgentInfo("kilo", "kilo-acp/", "Install kilo", ""),
-    AgentInfo("minion", "minion-acp/", "Install minion", ""),
-    AgentInfo("nova", "nova-acp/", "Install nova", ""),
-    AgentInfo("pi", "pi-acp/", "Install pi", ""),
-    AgentInfo("qoder", "qoder-acp/", "Install qoder", ""),
-    AgentInfo("stakpak", "stakpak-acp/", "Install stakpak", ""),
-    AgentInfo("vibe", "vibe-acp/", "Install Mistral Vibe", ""),
+    AgentInfo(
+        "cursor-cli",
+        "cursor-cli/",
+        "Install Cursor CLI",
+        "Legacy non-ACP print-mode adapter",
+    ),
+    AgentInfo("kimi", "kimi-acp/", "Install from https://github.com/MoonshotAI/kimi-cli/releases", ""),
+    AgentInfo("qwen", "qwen-acp/", "npm install -g @qwen-code/qwen-code", ""),
+    AgentInfo("codebuddy", "codebuddy-acp/", "npm install -g @tencent-ai/codebuddy-code", ""),
+    AgentInfo("cline", "cline-acp/", "npm install -g cline", ""),
+    AgentInfo("copilot", "copilot-acp/", "npm install -g @github/copilot", ""),
+    AgentInfo("copilot-ls", "copilot-ls/", "npm install -g @github/copilot-language-server", ""),
+    AgentInfo("amp", "amp-acp/", "Install from the tao12345666333/amp-acp releases", ""),
+    AgentInfo("auggie", "auggie-acp/", "npm install -g @augmentcode/auggie", ""),
+    AgentInfo("autohand", "autohand-acp/", "npm install -g @autohandai/autohand-acp", ""),
+    AgentInfo(
+        "corust",
+        "corust-acp/",
+        "Install from https://github.com/Corust-ai/corust-agent-release/releases",
+        "",
+    ),
+    AgentInfo("crow", "crow-acp/", "Install from https://github.com/crow-cli/crow-cli/releases", ""),
+    AgentInfo("deepagents", "deepagents-acp/", "npm install -g deepagents-acp", ""),
+    AgentInfo("droid", "droid-acp/", "npm install -g droid", ""),
+    AgentInfo("fastagent", "fastagent-acp/", "uv tool install fast-agent-acp", ""),
+    AgentInfo("goose", "goose-acp/", "Install from https://github.com/block/goose/releases", ""),
+    AgentInfo("junie", "junie-acp/", "Install from https://github.com/JetBrains/junie/releases", ""),
+    AgentInfo("kilo", "kilo-acp/", "npm install -g @kilocode/cli", ""),
+    AgentInfo("minion", "minion-acp/", "uv tool install minion-code", ""),
+    AgentInfo("nova", "nova-acp/", "npm install -g @compass-ai/nova", ""),
+    AgentInfo("pi", "pi-acp/", "npm install -g pi-acp", ""),
+    AgentInfo("qoder", "qoder-acp/", "npm install -g @qoder-ai/qodercli", ""),
+    AgentInfo("stakpak", "stakpak-acp/", "Install from https://github.com/stakpak/agent/releases", ""),
+    AgentInfo(
+        "vibe",
+        "vibe-acp/",
+        "Install from https://github.com/mistralai/mistral-vibe/releases",
+        "",
+    ),
 )
 
 
@@ -112,6 +142,7 @@ _FINDER_MAP = {
     "opencode": find_opencode_binary,
     "openclaw": find_openclaw_binary,
     "cursor": find_cursor_binary,
+    "cursor-cli": find_cursor_binary,
     "kimi": find_kimi_binary,
     "qwen": find_qwen_binary,
     "codebuddy": find_codebuddy_binary,
@@ -139,15 +170,13 @@ _FINDER_MAP = {
 
 
 def list_agents() -> list[AgentInfo]:
-    """Return the full list of ACP-compatible agents soulacp supports."""
+    """Return all native ACP and legacy CLI integrations soulacp supports."""
     return list(_AGENTS)
 
 
 def list_installed_agents() -> list[AgentInfo]:
     """Return the subset of supported agents whose CLI binary is on PATH."""
-    return [a for a in _AGENTS
-            if _FINDER_MAP.get(a.name)
-            and _FINDER_MAP[a.name]() is not None]
+    return [a for a in _AGENTS if _FINDER_MAP.get(a.name) and _FINDER_MAP[a.name]() is not None]
 
 
 def is_installed(agent_name: str) -> bool:

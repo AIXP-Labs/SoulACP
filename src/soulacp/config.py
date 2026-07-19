@@ -2,12 +2,171 @@
 
 from __future__ import annotations
 
+import copy
+import json
+import math
 import os
+import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from pathlib import Path, PurePosixPath, PureWindowsPath
+from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
     from soulacp.adapters.protocol import ACPClient
+
+_HTTP_HEADER_NAME = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+
+
+def _is_finite_number(value: int | float) -> bool:
+    """Return whether a numeric policy value fits a finite runtime float."""
+    try:
+        return math.isfinite(float(value))
+    except (OverflowError, TypeError, ValueError):
+        return False
+
+
+def _is_absolute_path(value: str) -> bool:
+    """Recognize native, POSIX, and Windows absolute paths lexically."""
+    return Path(value).is_absolute() or PurePosixPath(value).is_absolute() or PureWindowsPath(value).is_absolute()
+
+
+def _require_valid_unicode(value: str, label: str) -> None:
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"{label} must contain valid Unicode") from exc
+
+
+def _require_non_empty_string(value: Any, label: str, *, forbid_nul: bool = True) -> str:
+    if not isinstance(value, str) or not value or (forbid_nul and "\x00" in value):
+        suffix = " without NUL bytes" if forbid_nul else ""
+        raise ValueError(f"{label} must be a non-empty string{suffix}")
+    _require_valid_unicode(value, label)
+    return value
+
+
+def _validate_name_value_entries(
+    value: Any,
+    label: str,
+    *,
+    environment: bool = False,
+    http_headers: bool = False,
+) -> None:
+    if not isinstance(value, list):
+        raise ValueError(f"{label} must be a list")
+    for index, entry in enumerate(value):
+        if not isinstance(entry, dict):
+            raise ValueError(f"{label}[{index}] must be an object")
+        name = _require_non_empty_string(entry.get("name"), f"{label}[{index}].name")
+        if environment and "=" in name:
+            raise ValueError(f"{label}[{index}].name must not contain '='")
+        if http_headers and _HTTP_HEADER_NAME.fullmatch(name) is None:
+            raise ValueError(f"{label}[{index}].name must be a valid HTTP field name")
+        entry_value = entry.get("value")
+        if not isinstance(entry_value, str) or "\x00" in entry_value:
+            raise ValueError(f"{label}[{index}].value must be a string without NUL bytes")
+        _require_valid_unicode(entry_value, f"{label}[{index}].value")
+        if http_headers and ("\r" in entry_value or "\n" in entry_value):
+            raise ValueError(f"{label}[{index}].value must not contain CR or LF")
+
+
+def _validate_remote_mcp_url(value: Any, label: str) -> str:
+    url = _require_non_empty_string(value, label)
+    if url != url.strip():
+        raise ValueError(f"{label} must not contain surrounding whitespace")
+    if any(char.isspace() or ord(char) < 0x20 or ord(char) == 0x7F for char in url) or "\\" in url:
+        raise ValueError(f"{label} must not contain whitespace, control characters, or backslashes")
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"{label} must be a valid HTTP(S) URL") from exc
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname or (port is not None and port < 1):
+        raise ValueError(f"{label} must be an absolute HTTP(S) URL with a host")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(f"{label} must not contain embedded credentials; use headers")
+    return url
+
+
+def _validate_strict_json_value(value: Any, label: str) -> None:
+    """Require the in-memory shape to use JSON types without coercion."""
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if item is None or isinstance(item, (bool, int)):
+            continue
+        if isinstance(item, float):
+            if not math.isfinite(item):
+                raise ValueError(f"{label} numbers must be finite")
+            continue
+        if isinstance(item, str):
+            _require_valid_unicode(item, label)
+            continue
+        if isinstance(item, list):
+            pending.extend(item)
+            continue
+        if isinstance(item, dict):
+            for key, nested in item.items():
+                if not isinstance(key, str):
+                    raise ValueError(f"{label} object keys must be strings")
+                _require_valid_unicode(key, label)
+                pending.append(nested)
+            continue
+        raise ValueError(f"{label} must contain only JSON values")
+
+
+def _validate_mcp_servers(value: Any) -> list[dict[str, Any]]:
+    """Validate and detach ACP wire-shaped MCP server definitions."""
+    if not isinstance(value, list):
+        raise ValueError("mcp_servers must be a list")
+
+    try:
+        validated = copy.deepcopy(value)
+        _validate_strict_json_value(validated, "mcp_servers")
+        json.dumps(validated, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    except Exception as exc:
+        raise ValueError("mcp_servers must contain finite JSON values and valid Unicode") from exc
+    for index, server in enumerate(validated):
+        label = f"mcp_servers[{index}]"
+        if not isinstance(server, dict):
+            raise ValueError(f"{label} must be an object")
+        _require_non_empty_string(server.get("name"), f"{label}.name")
+        meta = server.get("_meta")
+        if meta is not None and not isinstance(meta, dict):
+            raise ValueError(f"{label}._meta must be an object or null")
+
+        transport = server.get("type")
+        if transport in (None, "stdio"):
+            command = _require_non_empty_string(server.get("command"), f"{label}.command")
+            if not _is_absolute_path(command):
+                raise ValueError(f"{label}.command must be an absolute path")
+            args = server.get("args")
+            if not isinstance(args, list) or not all(isinstance(arg, str) and "\x00" not in arg for arg in args):
+                raise ValueError(f"{label}.args must be a list of strings without NUL bytes")
+            for arg in args:
+                _require_valid_unicode(arg, f"{label}.args entry")
+            _validate_name_value_entries(server.get("env"), f"{label}.env", environment=True)
+            # ACP treats an absent discriminator as stdio. Emit the canonical
+            # wire shape even when callers use the explicit ergonomic spelling.
+            server.pop("type", None)
+            continue
+
+        if transport not in {"http", "sse"}:
+            raise ValueError(f"{label}.type must be 'http', 'sse', 'stdio', or omitted")
+        _validate_remote_mcp_url(server.get("url"), f"{label}.url")
+        _validate_name_value_entries(server.get("headers"), f"{label}.headers", http_headers=True)
+
+    return validated
+
+
+def _model_id_for_provider(model: str, provider: str) -> str:
+    """Remove only soulacp's leading provider namespace from a model ID."""
+    lowered = model.lower()
+    for prefix in (f"{provider}-acp/", f"{provider}/"):
+        if lowered.startswith(prefix.lower()):
+            return model[len(prefix) :]
+    return model
 
 
 # ---------------------------------------------------------------------------
@@ -35,68 +194,46 @@ def resolve_provider(model: str) -> str:
         ``nova-acp/default`` → ``nova``
         ``crow-acp/default`` → ``crow``
     """
+    if not isinstance(model, str) or not model or model != model.strip() or "\x00" in model:
+        raise ValueError("Cannot resolve provider from model")
+    _require_valid_unicode(model, "model")
     model_lower = model.lower()
-    if model_lower.startswith("claude"):
-        return "claude"
-    if model_lower.startswith("gemini"):
-        return "gemini"
-    if model_lower.startswith("opencode"):
-        return "opencode"
-    if model_lower.startswith("openclaw"):
-        return "openclaw"
-    if model_lower.startswith("cursor-cli"):
-        return "cursor-cli"
-    if model_lower.startswith("cursor"):
-        return "cursor"
-    if model_lower.startswith("codex"):
-        return "codex"
-    if model_lower.startswith("qwen"):
-        return "qwen"
-    if model_lower.startswith("kimi"):
-        return "kimi"
-    if model_lower.startswith("codebuddy"):
-        return "codebuddy"
-    if model_lower.startswith("cline"):
-        return "cline"
-    if model_lower.startswith("copilot-ls"):
-        return "copilot-ls"
-    if model_lower.startswith("copilot"):
-        return "copilot"
-    if model_lower.startswith("minion"):
-        return "minion"
-    if model_lower.startswith("vibe"):
-        return "vibe"
-    if model_lower.startswith("nova"):
-        return "nova"
-    if model_lower.startswith("crow"):
-        return "crow"
-    if model_lower.startswith("amp"):
-        return "amp"
-    if model_lower.startswith("auggie"):
-        return "auggie"
-    if model_lower.startswith("autohand"):
-        return "autohand"
-    if model_lower.startswith("corust"):
-        return "corust"
-    if model_lower.startswith("deepagents"):
-        return "deepagents"
-    if model_lower.startswith("droid"):
-        return "droid"
-    if model_lower.startswith("fastagent"):
-        return "fastagent"
-    if model_lower.startswith("goose"):
-        return "goose"
-    if model_lower.startswith("junie"):
-        return "junie"
-    if model_lower.startswith("kilo"):
-        return "kilo"
-    if model_lower.startswith("pi"):
-        return "pi"
-    if model_lower.startswith("qoder"):
-        return "qoder"
-    if model_lower.startswith("stakpak"):
-        return "stakpak"
-    return "claude"  # default
+    providers = (
+        "cursor-cli",
+        "copilot-ls",
+        "claude",
+        "gemini",
+        "opencode",
+        "openclaw",
+        "cursor",
+        "codex",
+        "qwen",
+        "kimi",
+        "codebuddy",
+        "cline",
+        "copilot",
+        "minion",
+        "vibe",
+        "nova",
+        "crow",
+        "amp",
+        "auggie",
+        "autohand",
+        "corust",
+        "deepagents",
+        "droid",
+        "fastagent",
+        "goose",
+        "junie",
+        "kilo",
+        "pi",
+        "qoder",
+        "stakpak",
+    )
+    for provider in providers:
+        if model_lower == provider or model_lower.startswith((f"{provider}-", f"{provider}/")):
+            return provider
+    raise ValueError("Cannot resolve provider from model")
 
 
 def resolve_client_class(provider: str) -> type[ACPClient]:
@@ -224,7 +361,7 @@ def resolve_client_class(provider: str) -> type[ACPClient]:
         from soulacp.adapters.stakpak_client import StakpakACPClient
 
         return StakpakACPClient
-    raise ValueError(f"Unknown provider: {provider}")
+    raise ValueError("Unknown provider")
 
 
 # ---------------------------------------------------------------------------
@@ -276,8 +413,8 @@ FALLBACK_MAP: dict[str, str] = {
 class ACPConfig:
     """Configuration for an ACP CLI subprocess connection.
 
-    All settings can be overridden via environment variables with the
-    ``ACP_`` prefix (e.g. ``ACP_POOL_SIZE=5``).
+    Scalar runtime settings can be overridden via environment variables with
+    the ``ACP_`` prefix (e.g. ``ACP_POOL_SIZE=5``).
     """
 
     provider: str = "claude"
@@ -286,26 +423,65 @@ class ACPConfig:
     model: str = "claude-acp/sonnet"
     """Full model identifier used by ModelRegistry."""
 
-    pool_size: int = 10
+    pool_size: int = 5
     """Maximum number of idle connections kept in the pool."""
 
-    pool_idle_timeout: int = 2592000
-    """Idle timeout in seconds before a pooled connection is closed (30 days)."""
+    pool_max_connections: int = 8
+    """Hard limit for open plus currently-creating connections in this pool instance."""
 
-    pool_keepalive_interval: int = 300
+    pool_acquire_timeout: float = 30
+    """Maximum seconds spent waiting for capacity before acquisition fails."""
+
+    pool_idle_timeout: float = 600
+    """Seconds since release before an idle pooled connection is retired."""
+
+    pool_keepalive_interval: float = 300
     """Keepalive check interval in seconds (5min). 0 = disabled."""
 
-    timeout_connect: int = 30
+    timeout_connect: float = 30
     """Timeout in seconds for subprocess startup + initialize."""
 
-    timeout_prompt: int = 2592000
-    """Timeout in seconds for a single prompt/response cycle (30 days)."""
+    timeout_prompt: float = 21600
+    """End-to-end timeout in seconds for a single prompt/response cycle (6 hours)."""
 
-    timeout_stream: int = 2592000
-    """Timeout in seconds for individual stream chunks (30 days)."""
+    timeout_stream: float = 1800
+    """Maximum seconds without any ACP stream activity (30 minutes)."""
 
-    cwd: str = field(default_factory=os.getcwd)
+    pool_max_age: float = 7200
+    """Maximum connection age in seconds before soft retirement on a lease boundary."""
+
+    pool_max_uses: int = 50
+    """Maximum successful leases before soft retirement."""
+
+    pool_cross_session_reuse: bool = False
+    """Allow an idle transport bound to another session to be resumed explicitly."""
+
+    cwd: str = field(default_factory=os.getcwd, repr=False)
     """Working directory for the CLI subprocess."""
+
+    inherit_parent_env: bool = True
+    """Inherit the full parent environment in provider and terminal children.
+
+    Set to ``False`` to retain only a bounded runtime/path/locale allowlist;
+    provider credentials must then come from ``extra_env`` or external stores.
+    This limits environment propagation but is not an OS sandbox.
+    """
+
+    additional_directories: list[str] = field(default_factory=list, repr=False)
+    """Ordered additional absolute workspace roots for ACP session setup.
+
+    Non-empty values require the agent to advertise
+    ``sessionCapabilities.additionalDirectories``.
+    """
+
+    mcp_servers: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    """ACP wire-shaped MCP server definitions supplied to session lifecycle calls.
+
+    Stdio definitions require ``name``, an absolute ``command``, ``args``, and
+    ``env``. HTTP/SSE definitions require ``type``, ``name``, ``url``, and
+    ``headers``. Structured fields intentionally have no environment-variable
+    parser; construct them explicitly so quoting and secrets remain unambiguous.
+    """
 
     auto_approve_permissions: bool = True
     """Automatically approve permission requests from the CLI."""
@@ -314,25 +490,20 @@ class ACPConfig:
     """Enable automatic fallback to another provider on failure."""
 
     max_retries: int = 3
-    """Maximum retry attempts for transient errors (Doc 25)."""
+    """Total pre-prompt attempts for transient errors (minimum one)."""
 
     retry_base_delay: float = 1.0
     """Base delay in seconds for exponential backoff (Doc 25)."""
 
-    max_turns: int = 100000
-    """Max agentic turns per ACP session.
+    max_turns: int | None = None
+    """Optional Claude-specific per-session turn cap.
 
-    Forwarded by the claude adapter as ``_meta.claudeCode.options.maxTurns`` on
-    session/new + session/resume. The Claude Agent SDK otherwise defaults to a
-    low per-session turn cap (~100) that long per-node AIAP pipelines exceed
-    mid-run (surfaces as SDK ``error_max_turns`` -> ACP ``max_turn_requests``).
-    100_000 clears any legitimate bounded pipeline (~hundreds of turns) by a
-    huge margin while still stopping a true runaway loop at 100k rather than
-    spinning unbounded. Override via ``ACP_MAX_TURNS``.
-    Only the claude adapter consumes this; other adapters ignore it.
+    When set, the Claude adapter forwards it through
+    ``_meta.claudeCode.options.maxTurns``. ``None`` preserves the provider's
+    own default. Other adapters ignore this field.
     """
 
-    extra_args: list[str] = field(default_factory=list)
+    extra_args: list[str] = field(default_factory=list, repr=False)
     """Extra arguments appended verbatim to the CLI subprocess command.
 
     Useful for adapter-specific tunables not yet exposed as typed fields.
@@ -346,12 +517,11 @@ class ACPConfig:
     Empty list = no extra args (default).
     """
 
-    extra_env: dict[str, str] = field(default_factory=dict)
+    extra_env: dict[str, str] = field(default_factory=dict, repr=False)
     """Extra environment variables passed to the CLI subprocess.
 
-    Some adapters do NOT forward CLI flags (e.g. claude-code-acp ignores
-    process.argv), so the only way to tune them from Python code is via
-    environment variables.
+    ACP bridges do not consistently forward provider CLI flags, so
+    environment variables are the reliable cross-adapter control surface.
 
     Examples:
       - Claude Code effort level:
@@ -363,40 +533,172 @@ class ACPConfig:
           extra_env={"CODEX_REASONING_EFFORT": "high"}
       - Any custom env vars your CLI reads.
 
-    Merged into ``os.environ.copy()`` at subprocess launch — user-supplied
-    keys override inherited shell env. Empty dict = no overrides (default).
+    Merged into the selected subprocess environment at launch — user-supplied
+    keys override inherited values. Empty dict = no overrides (default).
     """
 
     def __post_init__(self) -> None:
+        integer_fields = {
+            "pool_size": self.pool_size,
+            "pool_max_connections": self.pool_max_connections,
+            "pool_max_uses": self.pool_max_uses,
+            "max_retries": self.max_retries,
+        }
+        if self.max_turns is not None:
+            integer_fields["max_turns"] = self.max_turns
+        for name, value in integer_fields.items():
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"{name} must be an integer, got {value!r}")
+
+        number_fields = {
+            "pool_acquire_timeout": self.pool_acquire_timeout,
+            "pool_idle_timeout": self.pool_idle_timeout,
+            "pool_keepalive_interval": self.pool_keepalive_interval,
+            "pool_max_age": self.pool_max_age,
+            "timeout_connect": self.timeout_connect,
+            "timeout_prompt": self.timeout_prompt,
+            "timeout_stream": self.timeout_stream,
+            "retry_base_delay": self.retry_base_delay,
+        }
+        for name, value in number_fields.items():
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{name} must be a number, got {value!r}")
+
+        for name in (
+            "pool_cross_session_reuse",
+            "inherit_parent_env",
+            "auto_approve_permissions",
+            "enable_fallback",
+        ):
+            if not isinstance(getattr(self, name), bool):
+                raise ValueError(f"{name} must be a boolean, got {getattr(self, name)!r}")
+        if (
+            not isinstance(self.provider, str)
+            or not self.provider
+            or self.provider != self.provider.strip()
+            or "\x00" in self.provider
+        ):
+            raise ValueError("provider must be a non-empty string")
+        _require_valid_unicode(self.provider, "provider")
+        if (
+            not isinstance(self.model, str)
+            or not self.model
+            or self.model != self.model.strip()
+            or "\x00" in self.model
+        ):
+            raise ValueError("model must be a non-empty string")
+        _require_valid_unicode(self.model, "model")
+        if not isinstance(self.cwd, str) or not self.cwd or not self.cwd.strip() or "\x00" in self.cwd:
+            raise ValueError("cwd must be a non-empty string")
+        _require_valid_unicode(self.cwd, "cwd")
+        if not _is_absolute_path(self.cwd):
+            self.cwd = str(Path(self.cwd).expanduser().resolve())
+        if not isinstance(self.additional_directories, list):
+            raise ValueError("additional_directories must be a list of absolute paths")
+        for index, path in enumerate(self.additional_directories):
+            if not isinstance(path, str) or not path or "\x00" in path or not _is_absolute_path(path):
+                raise ValueError(f"additional_directories[{index}] must be a non-empty absolute path")
+            _require_valid_unicode(path, f"additional_directories[{index}]")
+        if not isinstance(self.extra_args, list) or not all(
+            isinstance(arg, str) and "\x00" not in arg for arg in self.extra_args
+        ):
+            raise ValueError("extra_args must be a list of strings without NUL bytes")
+        if not isinstance(self.extra_env, dict) or not all(
+            isinstance(key, str)
+            and bool(key)
+            and "=" not in key
+            and "\x00" not in key
+            and isinstance(value, str)
+            and "\x00" not in value
+            for key, value in self.extra_env.items()
+        ):
+            raise ValueError("extra_env must contain valid environment string names and values")
+        for arg in self.extra_args:
+            _require_valid_unicode(arg, "extra_args entry")
+        for key, value in self.extra_env.items():
+            _require_valid_unicode(key, "extra_env key")
+            _require_valid_unicode(value, f"extra_env value for {key!r}")
+
+        # ``dataclasses.replace`` otherwise aliases caller-owned mutable
+        # values across per-provider pool configurations.
+        self.additional_directories = list(self.additional_directories)
+        self.mcp_servers = _validate_mcp_servers(self.mcp_servers)
+        self.extra_args = list(self.extra_args)
+        self.extra_env = dict(self.extra_env)
+
         if self.pool_size < 1:
             raise ValueError(f"pool_size must be >= 1, got {self.pool_size}")
-        if self.timeout_connect <= 0:
+        if self.pool_max_connections < 1:
+            raise ValueError(f"pool_max_connections must be >= 1, got {self.pool_max_connections}")
+        if self.pool_size > self.pool_max_connections:
+            raise ValueError(
+                f"pool_size must be <= pool_max_connections, got {self.pool_size} > {self.pool_max_connections}"
+            )
+        if not _is_finite_number(self.pool_acquire_timeout) or self.pool_acquire_timeout <= 0:
+            raise ValueError(f"pool_acquire_timeout must be > 0, got {self.pool_acquire_timeout}")
+        if not _is_finite_number(self.pool_idle_timeout) or self.pool_idle_timeout <= 0:
+            raise ValueError(f"pool_idle_timeout must be > 0, got {self.pool_idle_timeout}")
+        if not _is_finite_number(self.pool_keepalive_interval) or self.pool_keepalive_interval < 0:
+            raise ValueError(f"pool_keepalive_interval must be >= 0, got {self.pool_keepalive_interval}")
+        if not _is_finite_number(self.pool_max_age) or self.pool_max_age <= 0:
+            raise ValueError(f"pool_max_age must be > 0, got {self.pool_max_age}")
+        if self.pool_max_uses < 1:
+            raise ValueError(f"pool_max_uses must be >= 1, got {self.pool_max_uses}")
+        if not _is_finite_number(self.timeout_connect) or self.timeout_connect <= 0:
             raise ValueError(f"timeout_connect must be > 0, got {self.timeout_connect}")
-        if self.timeout_prompt <= 0:
+        if not _is_finite_number(self.timeout_prompt) or self.timeout_prompt <= 0:
             raise ValueError(f"timeout_prompt must be > 0, got {self.timeout_prompt}")
+        if not _is_finite_number(self.timeout_stream) or self.timeout_stream <= 0:
+            raise ValueError(f"timeout_stream must be > 0, got {self.timeout_stream}")
         if self.max_retries < 0:
             raise ValueError(f"max_retries must be >= 0, got {self.max_retries}")
+        if self.max_turns is not None and self.max_turns < 1:
+            raise ValueError(f"max_turns must be >= 1 when set, got {self.max_turns}")
+        if not _is_finite_number(self.retry_base_delay) or self.retry_base_delay < 0:
+            raise ValueError(f"retry_base_delay must be >= 0, got {self.retry_base_delay}")
 
     @classmethod
-    def from_env(cls, **overrides) -> ACPConfig:
+    def from_env(cls, **overrides: Any) -> ACPConfig:
         """Create config from environment variables.
 
         Environment variables (all optional):
             ACP_PROVIDER          — provider name
             ACP_MODEL             — model identifier
-            ACP_POOL_SIZE         — max idle connections
-            ACP_POOL_IDLE_TIMEOUT — idle timeout seconds
+            ACP_POOL_SIZE                — max idle connections
+            ACP_POOL_MAX_CONNECTIONS     — hard per-pool connection limit
+            ACP_POOL_ACQUIRE_TIMEOUT     — capacity wait timeout seconds
+            ACP_POOL_IDLE_TIMEOUT        — idle timeout seconds
+            ACP_POOL_KEEPALIVE_INTERVAL  — keepalive interval seconds (0 disables)
+            ACP_POOL_MAX_AGE             — soft maximum connection age seconds
+            ACP_POOL_MAX_USES            — soft maximum successful leases
+            ACP_POOL_CROSS_SESSION_REUSE — explicitly allow cross-session resume
             ACP_TIMEOUT_CONNECT   — connect timeout
             ACP_TIMEOUT_PROMPT    — prompt timeout
             ACP_TIMEOUT_STREAM    — stream timeout
             ACP_CWD               — working directory
+            ACP_INHERIT_PARENT_ENV — inherit all parent environment variables
             ACP_AUTO_APPROVE      — auto-approve permissions (true/false)
+            ACP_ENABLE_FALLBACK   — pre-prompt provider fallback (true/false)
+            ACP_MAX_RETRIES       — total pre-prompt attempt budget
+            ACP_RETRY_BASE_DELAY  — exponential backoff base seconds
+            ACP_MAX_TURNS         — optional Claude-specific turn cap
         """
 
         def _env(key: str, default: str | None = None) -> str | None:
             return os.environ.get(f"ACP_{key}", default)
 
-        kwargs: dict = {}
+        def _bool_env(key: str) -> bool | None:
+            value = _env(key)
+            if value is None or value == "":
+                return None
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off"}:
+                return False
+            raise ValueError(f"ACP_{key} must be one of true/false, 1/0, yes/no, on/off; got {value!r}")
+
+        kwargs: dict[str, Any] = {}
 
         v = _env("PROVIDER")
         if v:
@@ -410,37 +712,61 @@ class ACPConfig:
         if v:
             kwargs["pool_size"] = int(v)
 
+        v = _env("POOL_MAX_CONNECTIONS")
+        if v:
+            kwargs["pool_max_connections"] = int(v)
+
+        v = _env("POOL_ACQUIRE_TIMEOUT")
+        if v:
+            kwargs["pool_acquire_timeout"] = float(v)
+
         v = _env("POOL_IDLE_TIMEOUT")
         if v:
-            kwargs["pool_idle_timeout"] = int(v)
+            kwargs["pool_idle_timeout"] = float(v)
 
         v = _env("POOL_KEEPALIVE_INTERVAL")
         if v:
-            kwargs["pool_keepalive_interval"] = int(v)
+            kwargs["pool_keepalive_interval"] = float(v)
+
+        v = _env("POOL_MAX_AGE")
+        if v:
+            kwargs["pool_max_age"] = float(v)
+
+        v = _env("POOL_MAX_USES")
+        if v:
+            kwargs["pool_max_uses"] = int(v)
+
+        v = _bool_env("POOL_CROSS_SESSION_REUSE")
+        if v is not None:
+            kwargs["pool_cross_session_reuse"] = v
 
         v = _env("TIMEOUT_CONNECT")
         if v:
-            kwargs["timeout_connect"] = int(v)
+            kwargs["timeout_connect"] = float(v)
 
         v = _env("TIMEOUT_PROMPT")
         if v:
-            kwargs["timeout_prompt"] = int(v)
+            kwargs["timeout_prompt"] = float(v)
 
         v = _env("TIMEOUT_STREAM")
         if v:
-            kwargs["timeout_stream"] = int(v)
+            kwargs["timeout_stream"] = float(v)
 
         v = _env("CWD")
         if v:
             kwargs["cwd"] = v
 
-        v = _env("AUTO_APPROVE")
-        if v:
-            kwargs["auto_approve_permissions"] = v.lower() in ("true", "1", "yes")
+        v = _bool_env("INHERIT_PARENT_ENV")
+        if v is not None:
+            kwargs["inherit_parent_env"] = v
 
-        v = _env("ENABLE_FALLBACK")
-        if v:
-            kwargs["enable_fallback"] = v.lower() in ("true", "1", "yes")
+        v = _bool_env("AUTO_APPROVE")
+        if v is not None:
+            kwargs["auto_approve_permissions"] = v
+
+        v = _bool_env("ENABLE_FALLBACK")
+        if v is not None:
+            kwargs["enable_fallback"] = v
 
         v = _env("MAX_RETRIES")
         if v:

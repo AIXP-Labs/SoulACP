@@ -1,6 +1,6 @@
 """Integration tests for Goose adapter.
 
-Run with: pytest tests/test_integration_goose.py -v
+Run with: pytest --run-integration tests/test_integration_goose.py -v
 Skip if not available.
 """
 

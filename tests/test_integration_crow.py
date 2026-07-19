@@ -1,6 +1,6 @@
 """Integration tests for Crow CLI ACP adapter.
 
-Run with: pytest tests/test_integration_crow.py -v
+Run with: pytest --run-integration tests/test_integration_crow.py -v
 Skip if crow-cli not available.
 """
 

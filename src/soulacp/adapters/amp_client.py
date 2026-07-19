@@ -9,7 +9,7 @@ from soulacp.adapters.base_client import ACPClientBase
 from soulacp.binary import find_amp_binary
 from soulacp.meta import CLIENT_NAME, __version__
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class AmpACPClient(ACPClientBase):
@@ -18,7 +18,7 @@ class AmpACPClient(ACPClientBase):
     Amp is a frontier coding agent with ACP support.
 
     Requires:
-        - amp (npm install -g @anthropic/amp)
+        - amp-acp (see https://github.com/tao12345666333/amp-acp/releases)
     """
 
     def _get_acp_command(self) -> list[str]:
@@ -26,7 +26,7 @@ class AmpACPClient(ACPClientBase):
         binary = find_amp_binary()
         if not binary:
             raise FileNotFoundError(
-                "Amp not found. Install with: npm install -g @anthropic/amp"
+                "Amp ACP not found. Install from: https://github.com/tao12345666333/amp-acp/releases"
             )
         return [binary]
 
@@ -47,17 +47,7 @@ class AmpACPClient(ACPClientBase):
         )
 
         # 2. authenticate (if required)
-        auth_methods = result.get("authMethods", [])
-        if auth_methods:
-            method_id = auth_methods[0].get("id", "api_key")
-            try:
-                await self._rpc(
-                    "authenticate",
-                    {"methodId": method_id},
-                    timeout=self.config.timeout_connect,
-                )
-            except Exception as e:
-                logger.warning("Amp authenticate failed: %s", e)
+        await self._authenticate_if_advertised(result, agent_name="Amp")
 
         # 3. session/new
         res = await self._rpc(
@@ -71,35 +61,13 @@ class AmpACPClient(ACPClientBase):
         self.session_id = res.get("sessionId") or res.get("session_id")
         if not self.session_id:
             raise ConnectionError("session/new did not return sessionId")
-        logger.info("Amp connected: session=%s", self.session_id)
+        logger.info("Amp session established")
 
         # 4. set model (optional, graceful degradation)
-        model_id = self.config.model.split("/")[-1] if self.config.model else None
+        model_id = self._configured_model_id()
         if model_id and model_id != "default":
-            try:
-                await self._rpc(
-                    "session/set_model",
-                    {"sessionId": self.session_id, "modelId": model_id},
-                    timeout=self.config.timeout_connect,
-                )
-                logger.info("Amp model set to: %s", model_id)
-            except Exception as e:
-                logger.warning("session/set_model not supported, skipping: %s", e)
+            await self._set_model_if_supported(model_id)
 
     async def resume(self, session_id: str) -> bool:
         """Resume a previous Amp session."""
-        try:
-            await self._rpc(
-                "session/resume",
-                {
-                    "sessionId": session_id,
-                    "cwd": self.config.cwd or os.getcwd(),
-                },
-                timeout=self.config.timeout_connect,
-            )
-            self.session_id = session_id
-            logger.info("Amp session resumed: %s", session_id)
-            return True
-        except Exception as e:
-            logger.debug("Amp session resume failed for %s: %s", session_id, e)
-            return False
+        return await self._resume_if_available("session/resume", session_id, agent_name="Amp")

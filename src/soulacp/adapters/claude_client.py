@@ -5,12 +5,12 @@ from __future__ import annotations
 import logging
 import os
 
-from soulacp.adapters.base_client import ACPClientBase
+from soulacp.adapters.base_client import ACPClientBase, RPCError
 from soulacp.binary import find_claude_binary
-from soulacp.config import ACPConfig
 from soulacp.meta import CLIENT_NAME, __version__
+from soulacp.privacy import exception_summary
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class ClaudeACPClient(ACPClientBase):
@@ -26,100 +26,120 @@ class ClaudeACPClient(ACPClientBase):
                   extra_env={"CLAUDE_CODE_EFFORT_LEVEL": "high"})
 
     Levels: ``low`` | ``medium`` | ``high`` | ``xhigh`` | ``max`` | ``auto``.
-    (``--effort`` CLI flag is NOT honored — ``claude-code-acp`` does not
-    forward process.argv to the underlying claude binary; env var is the
-    only reliable control surface.)
+    ACP bridges do not consistently forward ``--effort`` to the underlying
+    Claude runtime, so the environment variable is the reliable control surface.
     """
-
-    def __init__(self, config: ACPConfig) -> None:
-        super().__init__(config)
-        self._binary: str | None = None
-        self._is_acp: bool = False
-        # v0.1.6 (heap retained through 0.1.7): give the Claude Code (Node) subprocess a larger V8 heap by
-        # default to prevent long-session OOM crashes (exit code 3221226505 /
-        # 0xC0000409 STATUS_STACK_BUFFER_OVERRUN). Only set when the caller
-        # hasn't specified NODE_OPTIONS — caller override always wins.
-        if self.config.extra_env is None:
-            self.config.extra_env = {}
-        self.config.extra_env.setdefault("NODE_OPTIONS", "--max-old-space-size=8192")
 
     def _get_acp_command(self) -> list[str]:
         """Return command to start Claude CLI in ACP mode."""
         self._binary = find_claude_binary()
         if not self._binary:
             raise FileNotFoundError(
-                "Claude CLI not found. Install with: npm install -g @anthropic-ai/claude-code\n"
-                "Then authenticate with: claude login"
+                "Claude ACP bridge not found. Install with: npm install -g @agentclientprotocol/claude-agent-acp"
             )
-        self._is_acp = "claude-code-acp" in self._binary.lower()
-        return [self._binary] if self._is_acp else [self._binary, "mcp", "serve"]
+        return [self._binary]
 
     async def _initialize(self) -> None:
         """Perform Claude-specific protocol handshake and create a session."""
-        protocol_version = 1 if self._is_acp else "1"
-
         await self._rpc(
             "initialize",
             {
                 "clientInfo": {"name": CLIENT_NAME, "version": __version__},
-                "protocolVersion": protocol_version,
-                "clientCapabilities": {},
+                "protocolVersion": 1,
+                "clientCapabilities": {
+                    "fs": {"readTextFile": True, "writeTextFile": True},
+                    "terminal": True,
+                },
             },
             timeout=self.config.timeout_connect,
         )
 
         # Create session
-        res = await self._rpc(
-            "session/new",
-            {
-                "cwd": self.config.cwd or os.getcwd(),
-                "mcpServers": [],
-                # Raise the Claude Agent SDK per-session turn cap (default ~100,
-                # which long per-node AIAP pipelines exceed mid-run). claude-code-acp
-                # forwards params._meta.claudeCode.options into the SDK query options.
-                "_meta": {"claudeCode": {"options": {"maxTurns": self.config.max_turns}}},
-            },
-            timeout=self.config.timeout_connect,
-        )
+        session_params = {
+            "cwd": self.config.cwd or os.getcwd(),
+            "mcpServers": [],
+        }
+        if self.config.max_turns is not None:
+            session_params["_meta"] = {"claudeCode": {"options": {"maxTurns": self.config.max_turns}}}
+        res = await self._rpc("session/new", session_params, timeout=self.config.timeout_connect)
 
         self.session_id = res.get("sessionId") or res.get("session_id")
         if not self.session_id:
             raise ConnectionError("session/new did not return sessionId")
-        logger.info("Claude session created: %s", self.session_id)
+        logger.info("Claude session established")
 
-        # Set the model (e.g. "claude-acp/sonnet" → "sonnet")
-        model_id = self.config.model.split("/")[-1] if self.config.model else None
+        # Select the model (e.g. "claude-acp/sonnet" → "sonnet").
+        # ACP has no session/set_model; the bridge exposes the model as a
+        # config option (configId="model") validated against advertised values.
+        model_id = self._configured_model_id()
         if model_id:
-            try:
-                await self._rpc(
-                    "session/set_model",
-                    {
-                        "sessionId": self.session_id,
-                        "modelId": model_id,
-                    },
-                    timeout=self.config.timeout_connect,
-                )
-                logger.info("Claude model set to: %s", model_id)
-            except Exception as e:
-                logger.warning("session/set_model not supported, skipping: %s", e)
+            await self._select_model_config_option(model_id)
+
+    async def _select_model_config_option(self, model_id: str) -> bool:
+        """Best-effort model selection via ``session/set_config_option``.
+
+        Missing configOptions, no "model" option, no unambiguous value match,
+        or a provider RPC rejection degrades to the provider default. Transport,
+        timeout, and protocol failures remain visible to initialization callers.
+        """
+        model_opt = next(
+            (
+                option
+                for option in self.session_config_options
+                if option.get("type") == "select" and option.get("category") == "model"
+            ),
+            None,
+        )
+        if model_opt is None:
+            model_opt = next(
+                (
+                    option
+                    for option in self.session_config_options
+                    if option.get("type") == "select" and option.get("id") in {"model", "models"}
+                ),
+                None,
+            )
+        if model_opt is None:
+            logger.debug("No 'model' config option advertised; using provider default")
+            return False
+
+        config_id = model_opt["id"]
+        current = model_opt["currentValue"]
+        if current == model_id:
+            logger.debug("Configured Claude model is already selected")
+            return True
+
+        values = self._select_option_values(model_opt["options"], config_id=config_id)
+        chosen = model_id if model_id in values else None
+        if chosen is None:
+            matches = sorted(value for value in values if model_id in value or value in model_id)
+            chosen = matches[0] if len(matches) == 1 else None
+        if chosen is None:
+            logger.warning("Configured Claude model was not unambiguously advertised; using the current provider model")
+            return False
+        if chosen == current:
+            logger.debug("Configured Claude model alias resolves to the current model")
+            return True
+        try:
+            await self.set_config_option(config_id, chosen)
+        except RPCError as exc:
+            logger.warning(
+                "set_config_option(model=%s) rejected; using provider default: %s",
+                chosen,
+                exception_summary(exc),
+            )
+            return False
+        logger.info("ACP model selected via config option: %s", chosen)
+        return True
 
     async def resume(self, session_id: str) -> bool:
         """Resume a previous Claude session via session/resume."""
-        try:
-            await self._rpc(
-                "session/resume",
-                {
-                    "sessionId": session_id,
-                    "cwd": self.config.cwd or os.getcwd(),
-                    # Same turn-cap raise on resume — resumed sessions otherwise
-                    # fall back to the SDK default (~100).
-                    "_meta": {"claudeCode": {"options": {"maxTurns": self.config.max_turns}}},
-                },
-                timeout=self.config.timeout_connect,
-            )
-            self.session_id = session_id
-            logger.info("Claude session resumed: %s", session_id)
-            return True
-        except Exception as e:
-            logger.warning("Claude session resume failed: %s", e)
-            return False
+        extra_params = None
+        if self.config.max_turns is not None:
+            extra_params = {"_meta": {"claudeCode": {"options": {"maxTurns": self.config.max_turns}}}}
+        return await self._resume_if_available(
+            "session/resume",
+            session_id,
+            agent_name="Claude",
+            extra_params=extra_params,
+        )

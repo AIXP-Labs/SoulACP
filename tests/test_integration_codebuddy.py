@@ -1,6 +1,6 @@
 """Integration tests for Codebuddy Code ACP adapter.
 
-Run with: pytest tests/test_integration_codebuddy.py -v
+Run with: pytest --run-integration tests/test_integration_codebuddy.py -v
 Skip if codebuddy-code not available.
 """
 

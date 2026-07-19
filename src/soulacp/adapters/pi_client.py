@@ -9,7 +9,7 @@ from soulacp.adapters.base_client import ACPClientBase
 from soulacp.binary import find_pi_binary
 from soulacp.meta import CLIENT_NAME, __version__
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class PiACPClient(ACPClientBase):
@@ -18,16 +18,14 @@ class PiACPClient(ACPClientBase):
     pi ACP is a coding agent adapter with ACP support.
 
     Requires:
-        - pi (npm install -g @anthropic/pi-acp)
+        - pi (npm install -g pi-acp)
     """
 
     def _get_acp_command(self) -> list[str]:
         """Return command to start pi ACP in ACP mode."""
         binary = find_pi_binary()
         if not binary:
-            raise FileNotFoundError(
-                "pi ACP not found. Install with: npm install -g @anthropic/pi-acp"
-            )
+            raise FileNotFoundError("pi ACP not found. Install with: npm install -g pi-acp")
         return [binary]
 
     async def _initialize(self) -> None:
@@ -47,17 +45,7 @@ class PiACPClient(ACPClientBase):
         )
 
         # 2. authenticate (if required)
-        auth_methods = result.get("authMethods", [])
-        if auth_methods:
-            method_id = auth_methods[0].get("id", "api_key")
-            try:
-                await self._rpc(
-                    "authenticate",
-                    {"methodId": method_id},
-                    timeout=self.config.timeout_connect,
-                )
-            except Exception as e:
-                logger.warning("pi ACP authenticate failed: %s", e)
+        await self._authenticate_if_advertised(result, agent_name="pi ACP")
 
         # 3. session/new
         res = await self._rpc(
@@ -71,35 +59,13 @@ class PiACPClient(ACPClientBase):
         self.session_id = res.get("sessionId") or res.get("session_id")
         if not self.session_id:
             raise ConnectionError("session/new did not return sessionId")
-        logger.info("pi ACP connected: session=%s", self.session_id)
+        logger.info("pi ACP session established")
 
         # 4. set model (optional, graceful degradation)
-        model_id = self.config.model.split("/")[-1] if self.config.model else None
+        model_id = self._configured_model_id()
         if model_id and model_id != "default":
-            try:
-                await self._rpc(
-                    "session/set_model",
-                    {"sessionId": self.session_id, "modelId": model_id},
-                    timeout=self.config.timeout_connect,
-                )
-                logger.info("pi ACP model set to: %s", model_id)
-            except Exception as e:
-                logger.warning("session/set_model not supported, skipping: %s", e)
+            await self._set_model_if_supported(model_id)
 
     async def resume(self, session_id: str) -> bool:
         """Resume a previous pi ACP session."""
-        try:
-            await self._rpc(
-                "session/resume",
-                {
-                    "sessionId": session_id,
-                    "cwd": self.config.cwd or os.getcwd(),
-                },
-                timeout=self.config.timeout_connect,
-            )
-            self.session_id = session_id
-            logger.info("pi ACP session resumed: %s", session_id)
-            return True
-        except Exception as e:
-            logger.debug("pi ACP session resume failed for %s: %s", session_id, e)
-            return False
+        return await self._resume_if_available("session/resume", session_id, agent_name="pi ACP")

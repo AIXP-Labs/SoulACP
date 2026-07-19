@@ -1,5 +1,19 @@
 """Test that all soulacp modules import correctly."""
 
+from pathlib import Path
+
+import tomli
+
+
+def _project_metadata() -> dict:
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    with pyproject.open("rb") as stream:
+        return tomli.load(stream)["project"]
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
 
 def test_package_import():
     import re
@@ -8,20 +22,58 @@ def test_package_import():
 
     # Just verify the version is a valid SemVer string, not a hardcoded value
     # (avoid stale assertions when the package version bumps).
-    assert re.match(r"^\d+\.\d+\.\d+", soulacp.__version__), (
-        f"unexpected version format: {soulacp.__version__!r}"
-    )
+    assert re.match(r"^\d+\.\d+\.\d+", soulacp.__version__), f"unexpected version format: {soulacp.__version__!r}"
     # Verify key exports exist rather than hardcoding count
-    expected = {"ManagedSession", "ACPConfig", "ACPConnectionPool", "ACPClient", "ACPClientBase"}
+    expected = {
+        "ManagedSession",
+        "ACPConfig",
+        "ACPConnectionPool",
+        "ACPClient",
+        "ACPClientBase",
+        "is_context_overflow",
+    }
     assert expected.issubset(set(soulacp.__all__))
+    assert callable(soulacp.is_context_overflow)
+    assert _project_metadata()["version"] == soulacp.__version__
+
+
+def test_release_version_is_consistent_across_owned_metadata():
+    import soulacp
+
+    root = _project_root()
+    version = soulacp.__version__
+
+    with (root / "uv.lock").open("rb") as stream:
+        lock = tomli.load(stream)
+    locked_versions = [package["version"] for package in lock["package"] if package.get("name") == "soulacp"]
+    assert locked_versions == [version]
+
+    changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert changelog.count(f"## [{version}]") == 1
+    assert f"## [Unreleased]\n\nNo changes yet.\n\n## [{version}]" in changelog
+
+    footer_docs = (
+        "README.md",
+        "README_CN.md",
+        "CODE_OF_CONDUCT.md",
+        "CONTRIBUTING.md",
+        "CONTRIBUTING_CN.md",
+        "GOVERNANCE.md",
+        "SECURITY.md",
+    )
+    expected_footer = f"Version: SoulACP V{version}."
+    for filename in footer_docs:
+        content = (root / filename).read_text(encoding="utf-8")
+        assert expected_footer in content, f"stale or missing version footer in {filename}"
 
 
 def test_config_import():
     from soulacp.config import ACPConfig
 
-    config = ACPConfig(provider="claude", model="claude-sonnet-4-20250514")
+    config = ACPConfig(provider="claude", model="claude-acp/sonnet")
     assert config.provider == "claude"
-    assert config.pool_size == 10
+    assert config.pool_size == 5
+    assert config.pool_max_connections == 8
     assert config.timeout_connect == 30
     assert config.max_retries == 3
 
@@ -43,6 +95,73 @@ def test_resolve_provider():
 
     assert resolve_provider("claude-acp/claude-sonnet-4-20250514") == "claude"
     assert resolve_provider("gemini-acp/gemini-2.5-flash") == "gemini"
+
+
+def test_legacy_protocol_module_reexports_canonical_protocol():
+    from soulacp.adapters.protocol import ACPClient
+    from soulacp.protocol import ACPClientProtocol
+
+    assert ACPClientProtocol is ACPClient
+
+
+def test_all_registered_clients_satisfy_public_protocol():
+    from soulacp import ACPClient, ACPConfig
+    from soulacp.config import resolve_client_class
+    from soulacp.registry import list_agents
+
+    for agent in list_agents():
+        client_class = resolve_client_class(agent.name)
+        client = client_class(ACPConfig(provider=agent.name, model=f"{agent.model_prefix}default"))
+        assert isinstance(client, ACPClient), f"{client_class.__name__} does not satisfy ACPClient"
+
+
+def test_github_actions_are_pinned_to_immutable_commits():
+    import re
+
+    workflows = _project_root() / ".github" / "workflows"
+    references: list[tuple[Path, str]] = []
+    for workflow in workflows.glob("*.yml"):
+        for line in workflow.read_text(encoding="utf-8").splitlines():
+            match = re.search(r"\buses:\s*\S+@([^\s#]+)", line)
+            if match:
+                references.append((workflow, match.group(1)))
+
+    assert references, "no GitHub Actions references found"
+    for workflow, reference in references:
+        assert re.fullmatch(r"[0-9a-f]{40}", reference), (
+            f"{workflow.name} action reference is not an immutable commit: {reference}"
+        )
+
+
+def test_pre_commit_repositories_are_pinned_to_immutable_commits():
+    import re
+
+    config = (_project_root() / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+    references = re.findall(r"^\s*rev:\s*([^\s#]+)", config, re.MULTILINE)
+
+    assert references, "no pre-commit repository references found"
+    assert all(re.fullmatch(r"[0-9a-f]{40}", reference) for reference in references)
+
+
+def test_development_requirement_manifests_are_synchronized():
+    project_dev = _project_metadata()["optional-dependencies"]["dev"]
+    requirement_lines = [
+        line
+        for line in (_project_root() / "requirements-dev.txt").read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#")
+    ]
+    minimum_lines = [
+        line
+        for line in (_project_root() / "requirements-min.txt").read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#")
+    ]
+
+    assert requirement_lines == project_dev
+    assert all(">=" in requirement for requirement in project_dev)
+    assert all("==" in requirement for requirement in minimum_lines)
+    assert [requirement.split(">=", 1)[0] for requirement in project_dev] == [
+        requirement.split("==", 1)[0] for requirement in minimum_lines
+    ]
 
 
 def test_resolve_client_class():
@@ -160,8 +279,8 @@ def test_binary_import():
         find_kimi_binary,
         find_minion_binary,
         find_nova_binary,
-        find_opencode_binary,
         find_openclaw_binary,
+        find_opencode_binary,
         find_pi_binary,
         find_qoder_binary,
         find_qwen_binary,
@@ -210,11 +329,5 @@ def test_services_import():
 
 
 def test_no_external_deps():
-    """Verify soulacp has zero external package dependencies."""
-    external = ["requests", "httpx", "aiohttp", "websockets", "pydantic"]
-    # soulacp should not import any of these
-    import soulacp  # noqa: F811
-
-    for mod_name in external:
-        # Check soulacp source doesn't import these
-        assert mod_name not in str(soulacp.__dict__), f"soulacp imports {mod_name}"
+    """Verify the core distribution declares no runtime dependencies."""
+    assert _project_metadata().get("dependencies", []) == []

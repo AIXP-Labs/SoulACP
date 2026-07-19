@@ -8,40 +8,53 @@ Covers two concerns flagged by web research:
    but this test verifies that messages containing newlines round-trip
    correctly.
 
-2. **Large response / pipe buffer**: OS pipe buffer (typically 64 KB on
-   Windows, 4 KB on Linux) can deadlock with ``stdout=PIPE`` if the child
-   process generates large output before the parent reads. soulacp streams
-   via ``readline()``, but this test verifies a ~50 KB response is
-   delivered intact without hangs.
+2. **Live response progress**: model output must complete without a stdio
+   stall and streaming must yield progressively. The deterministic offline
+   lifecycle suite separately sends a 256 KB JSON-RPC frame through a local
+   subprocess, which is the actual regression proof beyond common OS pipe
+   buffer sizes.
 
-Both tests prefer Claude (stable, ChatGPT-auth) but fall back to Gemini
-if Claude unavailable.
+The default order is Codex, Claude, then Gemini. Set ``ACP_STRESS_PROVIDER``
+and optionally ``ACP_STRESS_MODEL`` to select a specific installed bridge.
 
-Run with: pytest tests/test_stress_stdio.py -v
+Run with: pytest --run-integration tests/test_stress_stdio.py -v
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 
 import pytest
 
-from soulacp.binary import find_claude_binary, find_gemini_binary
+from soulacp.binary import find_claude_binary, find_codex_binary, find_gemini_binary
 
 
 def _pick_provider():
-    """Pick a viable provider for stress testing — prefer Claude."""
-    if find_claude_binary() is not None:
-        return ("claude", "claude-acp/sonnet")
-    if find_gemini_binary() is not None:
-        return ("gemini", "gemini-3-flash-preview")
+    """Pick an installed provider, with an explicit environment override."""
+    providers = {
+        "codex": (find_codex_binary, "codex-acp/gpt-5.5"),
+        "claude": (find_claude_binary, "claude-acp/sonnet"),
+        "gemini": (find_gemini_binary, "gemini-3-flash-preview"),
+    }
+    requested = os.environ.get("ACP_STRESS_PROVIDER")
+    if requested:
+        if requested not in providers:
+            raise ValueError(f"unsupported ACP_STRESS_PROVIDER: {requested}")
+        finder, default_model = providers[requested]
+        if finder() is None:
+            return None
+        return requested, os.environ.get("ACP_STRESS_MODEL", default_model)
+    for provider, (finder, default_model) in providers.items():
+        if finder() is not None:
+            return provider, os.environ.get("ACP_STRESS_MODEL", default_model)
     return None
 
 
 pytestmark = pytest.mark.skipif(
     _pick_provider() is None,
-    reason="Neither Claude Code nor Gemini CLI installed",
+    reason="No supported Codex, Claude Code, or Gemini ACP bridge installed",
 )
 
 
@@ -75,14 +88,7 @@ def test_newline_round_trip(provider_config, client_class):
     """
     from soulacp import ACPConnectionPool
 
-    PROMPT = (
-        "Output the following 5 lines EXACTLY, no extra text:\n"
-        "LINE-1\n"
-        "LINE-2\n"
-        "LINE-3\n"
-        "LINE-4\n"
-        "LINE-5"
-    )
+    PROMPT = "Output the following 5 lines EXACTLY, no extra text:\nLINE-1\nLINE-2\nLINE-3\nLINE-4\nLINE-5"
 
     async def run():
         pool = ACPConnectionPool(provider_config, client_class)
@@ -98,22 +104,18 @@ def test_newline_round_trip(provider_config, client_class):
                 # No bare \r should appear (would indicate CRLF corruption);
                 # \r\n in normal text is OK as long as it follows \n.
                 # Specifically check that markers aren't fused (no "LINE-1\rLINE-2").
-                assert "\rLINE-" not in response, (
-                    "stray \\r between line markers — possible CRLF corruption"
-                )
+                assert "\rLINE-" not in response, "stray \\r between line markers — possible CRLF corruption"
         finally:
             await pool.close_all()
 
     asyncio.run(run())
 
 
-def test_large_response_no_deadlock(provider_config, client_class):
-    """Verify large response (~30+ KB) flows without pipe buffer deadlock.
+def test_medium_response_no_stall(provider_config, client_class):
+    """Verify a multi-kilobyte live model response completes without stalling.
 
     Asks the LLM to generate a substantial multi-section technical doc.
-    If the stdio pipe buffer fills before the parent reads, the subprocess
-    would block forever. Test passes if we receive a reasonable-size
-    response within timeout.
+    This is an end-to-end provider smoke test, not the 64 KB boundary proof.
     """
     from soulacp import ACPConnectionPool
 
@@ -136,23 +138,15 @@ def test_large_response_no_deadlock(provider_config, client_class):
                 elapsed = time.monotonic() - t0
 
                 bytes_received = len(response.encode("utf-8"))
-                # Should be at least 3 KB for 50 emotion entries inline.
-                # Lower threshold to tolerate concise LLM but still big enough
-                # to exercise pipe buffer (>4 KB on Linux, >64 KB on Windows
-                # would trigger deadlock if the pipe-streaming were broken).
+                # At least 3 KB confirms the provider honored the inline task.
                 assert bytes_received > 3_000, (
                     f"response too small ({bytes_received} bytes) — "
                     f"likely the agent wrote to a file instead of inline reply: "
                     f"{response[:300]}"
                 )
                 # Should complete within 3 minutes (generous)
-                assert elapsed < 180, (
-                    f"response took {elapsed:.1f}s > 180s — possible deadlock"
-                )
-                print(
-                    f"\n  ok: received {bytes_received} bytes in {elapsed:.1f}s "
-                    f"({bytes_received / elapsed:.0f} B/s)"
-                )
+                assert elapsed < 180, f"response took {elapsed:.1f}s > 180s — possible deadlock"
+                print(f"\n  ok: received {bytes_received} bytes in {elapsed:.1f}s ({bytes_received / elapsed:.0f} B/s)")
         finally:
             await pool.close_all()
 

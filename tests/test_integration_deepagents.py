@@ -1,6 +1,6 @@
 """Integration tests for DeepAgents ACP adapter.
 
-Run with: pytest tests/test_integration_deepagents.py -v
+Run with: pytest --run-integration tests/test_integration_deepagents.py -v
 Skip if not available.
 """
 

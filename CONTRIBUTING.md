@@ -10,7 +10,7 @@ Thank you for your interest in contributing to soulacp!
 >
 > This policy may be revisited in the future.
 
-> **Stage Status (v0.1.x)**
+> **Stage Status (v0.2.x)**
 >
 > SoulACP is at early development stage. The processes below describe the *target* development model. Initial decisions are made by AIXP Labs core maintainers; community discussion period scales as the contributor base grows.
 
@@ -46,14 +46,22 @@ Maintainers will assess and implement if approved.
 ### Quality Standards
 
 - All new code must include tests (unit + integration where feasible)
-- Code style: `ruff` (configured in `pyproject.toml`)
-- Type hints required (`py.typed` package)
+- Unit tests: `python -m pytest tests/ -W error -q`
+- Minimum supported development stack: `python -m pip install -e ".[dev]" -c requirements-min.txt`
+- Repository hooks: run `pre-commit install` once, then validate the full checkout with `pre-commit run --all-files`
+- Coverage measures statements and branches; the configured project threshold applies to the combined result
+- Code style: `python -m ruff check src/soulacp/ tests/ examples/` and `python -m ruff format --check src/soulacp/ tests/ examples/`
+- Type hints required (`py.typed` package); validate with `python -m pyright`
+  and `PYTHONPATH=src python -m pyright --verifytypes soulacp --ignoreexternal`
+  (PowerShell: set `$env:PYTHONPATH = "src"` before the second command)
+- Security scan: `python -m bandit -q -r src/soulacp`
+- Distribution build: `python -m build` followed by `python -m twine check dist/*`
 - Backwards-compatible API changes (no breaking changes between minor versions)
-- Zero external dependencies (stdlib only)
+- No required runtime dependencies; the OpenTelemetry API remains optional
 
 ### Bilingual Requirement
 
-README and CONTRIBUTING are maintained in English and Chinese. Issue can be in either language.
+README and CONTRIBUTING are maintained in English and Chinese. Issues can be in either language.
 
 ## Code of Conduct
 
@@ -67,4 +75,4 @@ Copyright 2026 AIXP Labs AIXP.dev | SoulACP.dev
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.1.2. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.0. www.soulacp.dev

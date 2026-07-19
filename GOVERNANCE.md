@@ -1,77 +1,86 @@
-# SoulACP Ecosystem Governance
+# SoulACP Governance
 
-The SoulACP (SoulACP) is governed by a decentralized, federated trust model designed to isolate the structure of intelligence from the rules of its application.
+SoulACP is an AIXP Labs maintained Python client library for the Agent Client
+Protocol. Governance applies to this repository's library API, provider
+adapters, runtime behavior, packaging, tests, and documentation. SoulACP does
+not define the ACP specification and does not govern third-party agent CLIs.
 
-## The Tripartite Chain
+## Maintenance Model
 
-SoulACP operates on a strict separation of concerns across three authoritative domains. **All layers are licensed under Apache 2.0** for unified patent protection and ecosystem consistency. **This repository** (`SoulACP-Protocol`) governs the soulacp.dev Authority Layer. The aisop.dev Seed Layer and soulbot.dev Executor Layer are maintained in separate repositories under the same Apache 2.0 license.
+AIXP Labs core maintainers make release and merge decisions. The project is in
+an early stage and currently accepts proposals and bug reports through GitHub
+Issues; the contribution policy in [CONTRIBUTING.md](CONTRIBUTING.md) states
+whether external pull requests are accepted at a given time.
 
-### 1. The Seed Layer (`aisop.dev`)
+Maintainers are responsible for:
 
-The origin of the format.
+- Session isolation, prompt replay safety, subprocess ownership, and cleanup
+- ACP/JSON-RPC compatibility and explicit handling of provider deviations
+- Public API stability, typing, packaging, and supported Python versions
+- Bilingual README and contribution-document alignment
+- Security response under [SECURITY.md](SECURITY.md)
+- Accurate attribution and Apache 2.0 license compliance
 
-- **Responsibility**: Defines the underlying `.aisop.json` language specification, Mermaid graph parsing rules, and the System/User execution model.
-- **Philosophy**: Neutral, static, foundational. Unconcerned with ethics or application logic.
-- **License**: Apache 2.0 — unified across the AIXP protocol family.
+## Decision Principles
 
-### 2. The Authority Layer (`soulacp.dev`)
+Changes are evaluated in this order:
 
-The source of governance and the steward of Axiom 0.
+1. Human sovereignty, wellbeing, privacy, and explicit caller control
+2. Session isolation and fail-closed behavior at trust boundaries
+3. Protocol correctness and provider interoperability
+4. Backward compatibility and migration cost
+5. Operational reliability, observability, and performance
+6. Maintenance cost and consistency with existing code
 
-- **Responsibility**: Maintains the `SoulACP_Protocol.md` structural specification, the `SoulACP_Standard.*.aisop.json` quality gates, and enforces the Zero-Entropy and L0 isolation rules.
-- **Philosophy**: Rigorous, uncompromising. Ensures that all compliant intelligence adheres to "Human Sovereignty and Wellbeing."
-- **License**: Apache 2.0 — providing patent protection for the governance layer.
+Prompt execution has external side effects and ACP v1 provides no prompt
+idempotency key. A performance optimization does not justify automatic replay
+when request outcome is unknown.
 
-### 3. The Executor Layer (`soulbot.dev`)
+## Change Process
 
-The reference runtime environment.
+1. Open an issue describing the problem, evidence, affected adapters, and
+   proposed compatibility impact.
+2. Maintainers classify the change as security, bug fix, feature, adapter
+   addition, documentation, or breaking API work.
+3. Implementation includes focused unit tests and integration coverage where a
+   real authenticated CLI is reasonably available.
+4. Required checks are unit tests, Ruff lint/format, Pyright, and distribution
+   build. Provider integration tests are opt-in because they require external
+   binaries and credentials.
+5. User-visible behavior is documented in both README languages and the
+   changelog before release.
 
-- **Responsibility**: Instantiates the AI Agent, resolves tools, manages memory layers, and enforces the `permissions` declared in the SoulACP contract.
-- **Philosophy**: Secure, performant, sandboxed.
-- **License**: Apache 2.0 — providing patent protection for the runtime layer.
+Security-sensitive changes may be developed privately under the coordinated
+disclosure process.
 
-## Axiom 0 Immutability
+## Adapter Requirements
 
-**Axiom 0: "Human Sovereignty and Wellbeing" is immutable.**
+New adapters must document an authoritative installation source and exact ACP
+entry command, validate initialization and session creation, preserve the
+common timeout and cleanup contracts, and avoid provider-specific behavior in
+the shared pool unless it is required by the protocol. Registry presence alone
+does not guarantee inclusion; the adapter must be testable and maintainable.
 
-No major, minor, or patch release of the SoulACP protocol may ever modify, weaken, or deprecate the core alignment to Human Sovereignty and Wellbeing. This constraint is absolute and non-negotiable.
-
-Any protocol change request that is determined to compromise, dilute, or bypass Axiom 0 will be rejected regardless of performance benefits, commercial pressure, or technical convenience.
+Legacy non-ACP integrations must be labeled explicitly and satisfy the same
+subprocess ownership and unknown-outcome safety rules.
 
 ## Versioning
 
-Changes to the SoulACP protocol follow strict Semantic Versioning (SemVer):
+SoulACP follows Semantic Versioning:
 
-- **Major**: Breaking changes to the AISOP format or SoulACP governance rules
-- **Minor**: Backward-compatible additions (new patterns, quality rules, capabilities)
-- **Patch**: Bug fixes, documentation corrections, non-normative clarifications
+- **Major**: incompatible public API or behavioral contract changes
+- **Minor**: backward-compatible features, adapters, and observability fields
+- **Patch**: compatible bug, security, packaging, and documentation fixes
 
-The Axiom 0 immutability constraint supersedes all versioning rules.
+Pre-1.0 releases may refine APIs more quickly, but breaking changes still
+require explicit changelog and migration guidance.
 
-## Protocol Steering
+## Axiom 0
 
-The SoulACP protocol is maintained by the SoulACP Protocol Organization across the three domains:
-
-| Domain | Role | Scope |
-|--------|------|-------|
-| `aisop.dev` | Format Steward | `.aisop.json` specification, field definitions |
-| `soulacp.dev` | Governance Steward | Protocol rules, quality standards, security model |
-| `soulbot.dev` | Runtime Steward | Reference implementation, tool resolution, execution |
-
-### Decision Process
-
-1. **Proposals**: Submit specification change requests via GitHub Issues with the `spec-change` label
-2. **Discussion**: Open discussion period (minimum 14 days for normative changes)
-3. **Review**: Maintainers review for Axiom 0 compliance, technical soundness, and backward compatibility
-4. **Consensus**: Changes require consensus among relevant domain stewards
-5. **Documentation**: All normative changes must include updated specification text and an Architecture Decision Record (ADR)
-
-## Communication
-
-- **GitHub Issues**: Primary channel for specification discussions and proposals
-- **GitHub Discussions**: Community questions and broader conversations
-- **Architecture Decision Records**: Documented in the [`adrs/`](adrs/) directory
+Human Sovereignty and Wellbeing is the project's immutable guiding constraint.
+It does not replace concrete engineering review; changes must also satisfy the
+testable safety and compatibility contracts described above.
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.1.2. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.0. www.soulacp.dev

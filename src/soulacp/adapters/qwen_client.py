@@ -9,7 +9,7 @@ from soulacp.adapters.base_client import ACPClientBase
 from soulacp.binary import find_qwen_binary
 from soulacp.meta import CLIENT_NAME, __version__
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class QwenACPClient(ACPClientBase):
@@ -27,9 +27,7 @@ class QwenACPClient(ACPClientBase):
         """Return command to start Qwen Code in ACP mode."""
         binary = find_qwen_binary()
         if not binary:
-            raise FileNotFoundError(
-                "Qwen Code CLI not found. Install with: npm install -g @qwen-code/qwen-code"
-            )
+            raise FileNotFoundError("Qwen Code CLI not found. Install with: npm install -g @qwen-code/qwen-code")
         return [binary, "--acp", "--experimental-skills"]
 
     async def _initialize(self) -> None:
@@ -60,35 +58,13 @@ class QwenACPClient(ACPClientBase):
         self.session_id = res.get("sessionId") or res.get("session_id")
         if not self.session_id:
             raise ConnectionError("session/new did not return sessionId")
-        logger.info("Qwen Code connected: session=%s", self.session_id)
+        logger.info("Qwen Code session established")
 
         # 3. set model (optional, graceful degradation)
-        model_id = self.config.model.split("/")[-1] if self.config.model else None
+        model_id = self._configured_model_id()
         if model_id:
-            try:
-                await self._rpc(
-                    "session/set_model",
-                    {"sessionId": self.session_id, "modelId": model_id},
-                    timeout=self.config.timeout_connect,
-                )
-                logger.info("Qwen model set to: %s", model_id)
-            except Exception as e:
-                logger.warning("session/set_model not supported, skipping: %s", e)
+            await self._set_model_if_supported(model_id)
 
     async def resume(self, session_id: str) -> bool:
         """Resume a previous Qwen Code session."""
-        try:
-            await self._rpc(
-                "session/resume",
-                {
-                    "sessionId": session_id,
-                    "cwd": self.config.cwd or os.getcwd(),
-                },
-                timeout=self.config.timeout_connect,
-            )
-            self.session_id = session_id
-            logger.info("Qwen session resumed: %s", session_id)
-            return True
-        except Exception as e:
-            logger.debug("Qwen session resume failed for %s: %s", session_id, e)
-            return False
+        return await self._resume_if_available("session/resume", session_id, agent_name="Qwen")

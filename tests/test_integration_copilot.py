@@ -1,6 +1,6 @@
 """Integration tests for GitHub Copilot CLI adapter.
 
-Run with: pytest tests/test_integration_copilot.py -v
+Run with: pytest --run-integration tests/test_integration_copilot.py -v
 Skip if copilot not available.
 """
 

@@ -1,6 +1,6 @@
 """Integration tests for Kilo adapter.
 
-Run with: pytest tests/test_integration_kilo.py -v
+Run with: pytest --run-integration tests/test_integration_kilo.py -v
 Skip if not available.
 """
 

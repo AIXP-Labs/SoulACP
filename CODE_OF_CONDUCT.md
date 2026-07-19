@@ -43,4 +43,4 @@ All reports will be reviewed and investigated promptly and fairly.
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.1.2. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.0. www.soulacp.dev

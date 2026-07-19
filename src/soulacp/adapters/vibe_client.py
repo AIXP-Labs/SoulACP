@@ -9,7 +9,7 @@ from soulacp.adapters.base_client import ACPClientBase
 from soulacp.binary import find_vibe_binary
 from soulacp.meta import CLIENT_NAME, __version__
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class VibeACPClient(ACPClientBase):
@@ -35,7 +35,7 @@ class VibeACPClient(ACPClientBase):
     async def _initialize(self) -> None:
         """Perform Mistral Vibe protocol handshake and create session."""
         # 1. initialize
-        result = await self._rpc(
+        await self._rpc(
             "initialize",
             {
                 "clientInfo": {"name": CLIENT_NAME, "version": __version__},
@@ -48,26 +48,11 @@ class VibeACPClient(ACPClientBase):
             timeout=self.config.timeout_connect,
         )
 
-        # 2. authenticate (if required — Mistral may need API key)
-        auth_methods = result.get("authMethods", [])
-        if auth_methods:
-            api_key = os.environ.get("MISTRAL_API_KEY", "")
-            if not api_key:
-                logger.warning("Mistral Vibe requires authentication but MISTRAL_API_KEY is not set")
-            method_id = auth_methods[0].get("id", "api_key")
-            try:
-                await self._rpc(
-                    "authenticate",
-                    {
-                        "authMethod": method_id,
-                        "credentials": {"api_key": api_key},
-                    },
-                    timeout=self.config.timeout_connect,
-                )
-            except Exception as e:
-                logger.warning("Vibe authenticate failed: %s", e)
+        # Vibe advertises available browser/terminal setup methods even when
+        # already authenticated. Headless clients must not trigger one merely
+        # because it appears in initialize; its child env/config is authoritative.
 
-        # 3. session/new
+        # 2. session/new
         res = await self._rpc(
             "session/new",
             {
@@ -79,35 +64,13 @@ class VibeACPClient(ACPClientBase):
         self.session_id = res.get("sessionId") or res.get("session_id")
         if not self.session_id:
             raise ConnectionError("session/new did not return sessionId")
-        logger.info("Vibe connected: session=%s", self.session_id)
+        logger.info("Vibe session established")
 
-        # 4. set model (optional, graceful degradation)
-        model_id = self.config.model.split("/")[-1] if self.config.model else None
+        # 3. set model (optional, graceful degradation)
+        model_id = self._configured_model_id()
         if model_id and model_id != "default":
-            try:
-                await self._rpc(
-                    "session/set_model",
-                    {"sessionId": self.session_id, "modelId": model_id},
-                    timeout=self.config.timeout_connect,
-                )
-                logger.info("Vibe model set to: %s", model_id)
-            except Exception as e:
-                logger.warning("session/set_model not supported, skipping: %s", e)
+            await self._set_model_if_supported(model_id)
 
     async def resume(self, session_id: str) -> bool:
         """Resume a previous Mistral Vibe session."""
-        try:
-            await self._rpc(
-                "session/resume",
-                {
-                    "sessionId": session_id,
-                    "cwd": self.config.cwd or os.getcwd(),
-                },
-                timeout=self.config.timeout_connect,
-            )
-            self.session_id = session_id
-            logger.info("Vibe session resumed: %s", session_id)
-            return True
-        except Exception as e:
-            logger.debug("Vibe session resume failed for %s: %s", session_id, e)
-            return False
+        return await self._resume_if_available("session/resume", session_id, agent_name="Vibe")

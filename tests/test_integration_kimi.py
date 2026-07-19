@@ -1,6 +1,6 @@
 """Integration tests for Kimi CLI adapter.
 
-Run with: pytest tests/test_integration_kimi.py -v
+Run with: pytest --run-integration tests/test_integration_kimi.py -v
 Skip if Kimi CLI not available.
 """
 

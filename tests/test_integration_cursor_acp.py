@@ -1,6 +1,6 @@
 """Integration tests for Cursor ACP adapter.
 
-Run with: pytest tests/test_integration_cursor_acp.py -v
+Run with: pytest --run-integration tests/test_integration_cursor_acp.py -v
 Skip if cursor-agent not available.
 """
 

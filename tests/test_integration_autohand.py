@@ -1,6 +1,6 @@
 """Integration tests for Autohand ACP adapter.
 
-Run with: pytest tests/test_integration_autohand.py -v
+Run with: pytest --run-integration tests/test_integration_autohand.py -v
 Skip if not available.
 """
 

@@ -1,6 +1,6 @@
 """Integration tests for Qwen Code ACP adapter.
 
-Run with: pytest tests/test_integration_qwen.py -v
+Run with: pytest --run-integration tests/test_integration_qwen.py -v
 Skip if qwen-code not available.
 """
 

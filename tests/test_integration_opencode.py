@@ -1,6 +1,6 @@
 """Integration tests for OpenCode ACP adapter.
 
-Run with: pytest tests/test_integration_opencode.py -v
+Run with: pytest --run-integration tests/test_integration_opencode.py -v
 Skip if OpenCode CLI not available.
 
 OpenCode uses ``OPENCODE_CONFIG_CONTENT`` env var to pass model selection
@@ -84,9 +84,7 @@ def test_streaming(config, client_class):
         chunks: list[str] = []
         try:
             async with pool.acquire() as (client, _sid):
-                async for chunk in client.query_stream(
-                    "Count from 1 to 3, one number per line."
-                ):
+                async for chunk in client.query_stream("Count from 1 to 3, one number per line."):
                     if isinstance(chunk, str):
                         chunks.append(chunk)
                 assert len(chunks) > 0, "expected at least 1 stream chunk"
@@ -114,9 +112,7 @@ def test_model_selection(client_class):
         pool = ACPConnectionPool(config, client_class)
         try:
             async with pool.acquire() as (client, session_id):
-                response = await client.query(
-                    "What model are you? Reply in ONE short sentence."
-                )
+                response = await client.query("What model are you? Reply in ONE short sentence.")
                 assert len(response) > 0
         finally:
             await pool.close_all()
@@ -157,9 +153,7 @@ def test_session_reuse(config, client_class):
 
             async with pool.acquire(session_id=sid1) as (client2, sid2):
                 assert sid2 == sid1, f"expected reused session {sid1}, got {sid2}"
-                response = await client2.query(
-                    "What number did I ask you to remember?"
-                )
+                response = await client2.query("What number did I ask you to remember?")
                 assert "42" in response, f"context not retained: {response}"
         finally:
             await pool.close_all()

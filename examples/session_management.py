@@ -1,7 +1,8 @@
 """Session management example — reuse CLI sessions across requests."""
 
 import asyncio
-from soulacp import ManagedSession, ProviderSessionStore, FileCache
+
+from soulacp import FileCache, ManagedSession, ProviderSessionStore
 
 
 async def main():
@@ -10,7 +11,7 @@ async def main():
 
     async with ManagedSession(
         provider="claude",
-        model="claude-sonnet-4-20250514",
+        model="claude-acp/sonnet",
         session_store=store,
     ) as session:
         # First request — creates new CLI session

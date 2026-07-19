@@ -1,6 +1,6 @@
 """Integration tests for Junie adapter.
 
-Run with: pytest tests/test_integration_junie.py -v
+Run with: pytest --run-integration tests/test_integration_junie.py -v
 Skip if not available.
 """
 

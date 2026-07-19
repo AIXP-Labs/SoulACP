@@ -1,6 +1,6 @@
 """Integration tests for pi ACP adapter.
 
-Run with: pytest tests/test_integration_pi.py -v
+Run with: pytest --run-integration tests/test_integration_pi.py -v
 Skip if not available.
 """
 

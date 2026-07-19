@@ -1,6 +1,6 @@
 """Integration tests for Mistral Vibe ACP adapter.
 
-Run with: pytest tests/test_integration_vibe.py -v
+Run with: pytest --run-integration tests/test_integration_vibe.py -v
 Skip if vibe-acp not available.
 """
 

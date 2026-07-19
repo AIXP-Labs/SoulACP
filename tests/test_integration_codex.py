@@ -1,10 +1,10 @@
 """Integration tests for Codex ACP adapter.
 
-Run with: pytest tests/test_integration_codex.py -v
+Run with: pytest --run-integration tests/test_integration_codex.py -v
 Skip if codex-acp not available.
 
 Auth: relies on whatever ``codex login`` has stored locally:
-  - ``codex login`` with ChatGPT account → uses ``gpt-5.5`` (default below)
+  - ``codex login`` with ChatGPT account → uses ``gpt-5.5`` (example below)
   - ``OPENAI_API_KEY`` env var → uses API-key auth (override model accordingly)
 """
 
@@ -18,7 +18,7 @@ from soulacp.binary import find_codex_binary
 # Auth is handled implicitly by codex-acp via ~/.codex/auth.json or env var.
 pytestmark = pytest.mark.skipif(
     find_codex_binary() is None,
-    reason="codex-acp not installed (npm install -g @zed-industries/codex-acp)",
+    reason="codex-acp not installed (npm install -g @agentclientprotocol/codex-acp)",
 )
 
 
@@ -28,7 +28,7 @@ def config():
 
     return ACPConfig(
         provider="codex",
-        model="codex-acp/gpt-5.5",  # ChatGPT-auth friendly default
+        model="codex-acp/gpt-5.5",  # Compatibility baseline; availability depends on the account
         timeout_connect=30,
         timeout_prompt=120,
     )
@@ -94,9 +94,7 @@ def test_model_selection(client_class):
             async with pool.acquire() as (client, session_id):
                 # If model selection works, this should respond.
                 # If model is invalid for current auth, error is raised.
-                response = await client.query(
-                    "What model are you? Reply in ONE short sentence."
-                )
+                response = await client.query("What model are you? Reply in ONE short sentence.")
                 assert len(response) > 0
         finally:
             await pool.close_all()
@@ -113,9 +111,7 @@ def test_streaming(config, client_class):
         chunks: list[str] = []
         try:
             async with pool.acquire() as (client, _sid):
-                async for chunk in client.query_stream(
-                    "Count from 1 to 5, one number per line."
-                ):
+                async for chunk in client.query_stream("Count from 1 to 5, one number per line."):
                     if isinstance(chunk, str):
                         chunks.append(chunk)
                 assert len(chunks) > 0, "expected at least 1 stream chunk"
@@ -163,9 +159,7 @@ def test_session_reuse(config, client_class):
             # Second query — explicitly reuse the same session_id
             async with pool.acquire(session_id=sid1) as (client2, sid2):
                 assert sid2 == sid1, f"expected reused session {sid1}, got {sid2}"
-                response = await client2.query(
-                    "What number did I ask you to remember?"
-                )
+                response = await client2.query("What number did I ask you to remember?")
                 assert "42" in response, f"context not retained: {response}"
         finally:
             await pool.close_all()

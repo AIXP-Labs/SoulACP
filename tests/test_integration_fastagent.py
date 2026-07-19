@@ -1,6 +1,6 @@
 """Integration tests for fast-agent ACP adapter.
 
-Run with: pytest tests/test_integration_fastagent.py -v
+Run with: pytest --run-integration tests/test_integration_fastagent.py -v
 Skip if not available.
 """
 

@@ -1,6 +1,6 @@
 """Integration tests for Qoder CLI adapter.
 
-Run with: pytest tests/test_integration_qoder.py -v
+Run with: pytest --run-integration tests/test_integration_qoder.py -v
 Skip if not available.
 """
 

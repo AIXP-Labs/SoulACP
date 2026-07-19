@@ -29,6 +29,8 @@ env/
 
 # Testing
 .pytest_cache/
+.ruff_cache/
+.hypothesis/
 .coverage
 .coverage.*
 htmlcov/
@@ -40,6 +42,8 @@ coverage.xml
 # Distribution
 *.whl
 *.tar.gz
+/dist-audit-*/
+/sdist-audit-*/
 
 # Environment / secrets
 .env

@@ -1,0 +1,17 @@
+include CHANGELOG.md
+include CODE_OF_CONDUCT.md
+include CONTRIBUTING.md
+include CONTRIBUTING_CN.md
+include GOVERNANCE.md
+include README_CN.md
+include SECURITY.md
+include .gitattributes
+include .gitignore
+include .pre-commit-config.yaml
+include Makefile
+include requirements-dev.txt
+include requirements-min.txt
+include uv.lock
+recursive-include .github *.yml
+recursive-include examples *.py
+recursive-include tests *.py

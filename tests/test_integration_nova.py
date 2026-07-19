@@ -1,6 +1,6 @@
 """Integration tests for Nova ACP adapter.
 
-Run with: pytest tests/test_integration_nova.py -v
+Run with: pytest --run-integration tests/test_integration_nova.py -v
 Skip if nova not available.
 """
 

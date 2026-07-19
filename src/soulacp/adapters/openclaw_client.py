@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
+from urllib.parse import urlsplit
 
-from soulacp.adapters.base_client import ACPClientBase
+from soulacp.adapters.base_client import ACPClientBase, RPCError
 from soulacp.binary import find_openclaw_binary
 from soulacp.meta import CLIENT_NAME, __version__
+from soulacp.privacy import exception_summary
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 # Valid OpenClaw thinking levels (from openclaw/src/auto-reply/thinking.ts).
 VALID_THINKING_LEVELS = frozenset(
@@ -23,6 +24,30 @@ VALID_THINKING_LEVELS = frozenset(
         "xhigh",
     }
 )
+
+
+def _validate_gateway_url(url: str) -> str:
+    """Validate the WebSocket URL before exposing it in child argv."""
+    try:
+        url.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError("OPENCLAW_URL must contain valid Unicode") from exc
+    if url != url.strip():
+        raise ValueError("OPENCLAW_URL must not contain surrounding whitespace")
+    if any(char.isspace() or ord(char) < 0x20 or ord(char) == 0x7F for char in url) or "\\" in url:
+        raise ValueError("OPENCLAW_URL must not contain whitespace, control characters, or backslashes")
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+        username = parsed.username
+        password = parsed.password
+    except ValueError as exc:
+        raise ValueError("OPENCLAW_URL must be a valid WebSocket URL") from exc
+    if username is not None or password is not None:
+        raise ValueError("OPENCLAW_URL must not contain embedded credentials")
+    if parsed.scheme.lower() not in {"ws", "wss"} or not parsed.hostname or (port is not None and port < 1):
+        raise ValueError("OPENCLAW_URL must be an absolute ws:// or wss:// URL with a host")
+    return url
 
 
 def _parse_thinking_level(model: str) -> str | None:
@@ -65,32 +90,36 @@ class OpenClawACPClient(ACPClientBase):
         cmd = [binary, "acp", "--no-prefix-cwd"]
 
         # Gateway URL
-        url = os.environ.get("OPENCLAW_URL")
+        url = self._child_env_value("OPENCLAW_URL")
         if url:
-            cmd.extend(["--url", url])
+            cmd.extend(["--url", _validate_gateway_url(url)])
 
-        # Authentication (token-file > token > password-file > password)
-        token_file = os.environ.get("OPENCLAW_TOKEN_FILE")
-        token = os.environ.get("OPENCLAW_TOKEN")
-        password_file = os.environ.get("OPENCLAW_PASSWORD_FILE")
-        password = os.environ.get("OPENCLAW_PASSWORD")
+        # Authentication overrides use files only. Plain secrets on argv are
+        # visible to local process-inspection tools on common operating systems.
+        token_file = self._child_env_value("OPENCLAW_TOKEN_FILE")
+        token = self._child_env_value("OPENCLAW_TOKEN")
+        password_file = self._child_env_value("OPENCLAW_PASSWORD_FILE")
+        password = self._child_env_value("OPENCLAW_PASSWORD")
+
+        if token:
+            raise ValueError("OPENCLAW_TOKEN is not accepted; use OPENCLAW_TOKEN_FILE or configured Gateway auth")
+        if password:
+            raise ValueError("OPENCLAW_PASSWORD is not accepted; use OPENCLAW_PASSWORD_FILE or configured Gateway auth")
 
         if token_file:
             cmd.extend(["--token-file", token_file])
-        elif token:
-            cmd.extend(["--token", token])
         elif password_file:
             cmd.extend(["--password-file", password_file])
-        elif password:
-            cmd.extend(["--password", password])
 
-        # Session key — required to route prompts to an agent.
-        # Defaults to "agent:main:main" (the default OpenClaw agent).
-        session_key = os.environ.get("OPENCLAW_SESSION_KEY", "agent:main:main")
-        cmd.extend(["--session", session_key])
+        # Leave session routing to OpenClaw by default.  Its ACP bridge creates
+        # an isolated acp-bridge:<uuid> key; --session deliberately opts into a
+        # shared/attached Gateway session and must therefore be explicit.
+        session_key = self._child_env_value("OPENCLAW_SESSION_KEY")
+        if session_key:
+            cmd.extend(["--session", session_key])
 
         # Verbose logging
-        if os.environ.get("OPENCLAW_VERBOSE", "").lower() in ("true", "1", "yes"):
+        if (self._child_env_value("OPENCLAW_VERBOSE", "") or "").lower() in ("true", "1", "yes"):
             cmd.append("--verbose")
 
         return cmd
@@ -103,7 +132,10 @@ class OpenClawACPClient(ACPClientBase):
             {
                 "clientInfo": {"name": CLIENT_NAME, "version": __version__},
                 "protocolVersion": 1,
-                "clientCapabilities": {},
+                "clientCapabilities": {
+                    "fs": {"readTextFile": True, "writeTextFile": True},
+                    "terminal": True,
+                },
             },
             timeout=self.config.timeout_connect,
         )
@@ -120,25 +152,11 @@ class OpenClawACPClient(ACPClientBase):
         self.session_id = res.get("sessionId") or res.get("session_id")
         if not self.session_id:
             raise ConnectionError("session/new did not return sessionId")
-        logger.info("OpenClaw session created: %s", self.session_id)
-
-        # 2b. Wait for Gateway WebSocket to fully connect.
-        # The ACP bridge connects to Gateway asynchronously after startup;
-        # session/new succeeds locally but prompt will fail with
-        # "gateway not connected" if we send it too early.
-        # Use a ping-based readiness check with exponential backoff
-        # instead of a fixed sleep.
-        for attempt in range(6):  # 0.5 + 1 + 1.5 + 2 + 2.5 + 3 = 10.5s max
-            await asyncio.sleep(0.5 + attempt * 0.5)
-            if await self.ping():
-                logger.info("OpenClaw Gateway ready after %.1fs", 0.5 + attempt * 0.5)
-                break
-        else:
-            logger.warning("OpenClaw Gateway readiness check timed out, proceeding anyway")
+        logger.info("OpenClaw session established")
 
         # 3. Set thinking level (optional)
         thinking = _parse_thinking_level(self.config.model)
-        if thinking and thinking != "off":
+        if thinking:
             try:
                 await self._rpc(
                     "session/set_mode",
@@ -149,23 +167,9 @@ class OpenClawACPClient(ACPClientBase):
                     timeout=self.config.timeout_connect,
                 )
                 logger.info("OpenClaw thinking level: %s", thinking)
-            except Exception as e:
-                logger.warning("session/set_mode failed: %s", e)
+            except RPCError as e:
+                logger.warning("session/set_mode failed: %s", exception_summary(e))
 
     async def resume(self, session_id: str) -> bool:
         """Resume a previous OpenClaw session via ``session/load``."""
-        try:
-            await self._rpc(
-                "session/load",
-                {
-                    "sessionId": session_id,
-                    "cwd": self.config.cwd or os.getcwd(),
-                },
-                timeout=self.config.timeout_connect,
-            )
-            self.session_id = session_id
-            logger.info("OpenClaw session loaded: %s", session_id)
-            return True
-        except Exception as e:
-            logger.warning("OpenClaw session load failed: %s", e)
-            return False
+        return await self._resume_if_available("session/load", session_id, agent_name="OpenClaw")

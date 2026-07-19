@@ -1,6 +1,6 @@
 """Integration tests for Auggie CLI adapter.
 
-Run with: pytest tests/test_integration_auggie.py -v
+Run with: pytest --run-integration tests/test_integration_auggie.py -v
 Skip if not available.
 """
 

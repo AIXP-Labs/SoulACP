@@ -3,11 +3,76 @@
 from __future__ import annotations
 
 import os
-import shutil
+import re
 import sys
+from collections.abc import Mapping
+from pathlib import PurePosixPath, PureWindowsPath
+
+from soulacp.environment import get_subprocess_environment_value
+
+_WINDOWS_DEFAULT_PATHEXT = (".COM", ".EXE", ".BAT", ".CMD")
+_WINDOWS_EXTENSION = re.compile(r"^\.[A-Za-z0-9]+$")
 
 
-def find_binary(names: list[str]) -> str | None:
+def _environment_value(environment: Mapping[str, str] | None, name: str, default: str = "") -> str:
+    source = os.environ if environment is None else environment
+    value = get_subprocess_environment_value(source, name, default)
+    return default if value is None else value
+
+
+def _candidate_names(name: str, environment: Mapping[str, str] | None) -> list[str]:
+    if sys.platform != "win32":
+        return [name]
+    extensions = [
+        extension
+        for raw_extension in _environment_value(environment, "PATHEXT").split(";")
+        if (extension := raw_extension.strip()) and _WINDOWS_EXTENSION.fullmatch(extension)
+    ]
+    if not extensions:
+        extensions = list(_WINDOWS_DEFAULT_PATHEXT)
+    if any(name.lower().endswith(extension.lower()) for extension in extensions):
+        return [name]
+    return [f"{name}{extension}" for extension in extensions]
+
+
+def _is_bare_binary_name(name: object) -> bool:
+    return (
+        isinstance(name, str)
+        and bool(name)
+        and "\x00" not in name
+        and PurePosixPath(name).name == name
+        and PureWindowsPath(name).name == name
+    )
+
+
+def _find_on_absolute_path(name: str, environment: Mapping[str, str] | None = None) -> str | None:
+    """Resolve *name* without trusting implicit current-directory entries."""
+    if not _is_bare_binary_name(name):
+        return None
+
+    if environment is None:
+        directories = os.get_exec_path()
+    else:
+        # ``os.get_exec_path(mapping)`` performs a case-sensitive ``PATH``
+        # lookup even on Windows. Child environment blocks are
+        # case-insensitive there, so honor common spellings such as ``Path``.
+        search_path = _environment_value(environment, "PATH", os.defpath)
+        directories = search_path.split(os.pathsep)
+    for raw_directory in directories:
+        directory = raw_directory.strip('"')
+        if not directory or not os.path.isabs(directory):
+            continue
+        for candidate in _candidate_names(name, environment):
+            path = os.path.join(directory, candidate)
+            if os.path.isfile(path) and (sys.platform == "win32" or os.access(path, os.X_OK)):
+                return os.path.abspath(path)
+    return None
+
+
+def find_binary_in_environment(
+    names: list[str],
+    environment: Mapping[str, str] | None = None,
+) -> str | None:
     """Find a CLI binary by searching PATH and common install locations.
 
     Args:
@@ -17,24 +82,31 @@ def find_binary(names: list[str]) -> str | None:
         Absolute path to the binary, or ``None`` if not found.
     """
     for name in names:
-        cmd = shutil.which(name)
+        if not _is_bare_binary_name(name):
+            continue
+        cmd = _find_on_absolute_path(name, environment)
         if cmd:
             return cmd
         # Windows: check npm global install locations
         if sys.platform == "win32":
             for base_var in ("APPDATA", "LOCALAPPDATA"):
-                base = os.environ.get(base_var, "")
-                if base:
+                base = _environment_value(environment, base_var)
+                if base and os.path.isabs(base):
                     for suffix in (".cmd", ".exe", ""):
                         path = os.path.join(base, "npm", f"{name}{suffix}")
-                        if os.path.exists(path):
-                            return path
+                        if os.path.isfile(path):
+                            return os.path.abspath(path)
     return None
 
 
+def find_binary(names: list[str]) -> str | None:
+    """Find a CLI binary in the current process environment."""
+    return find_binary_in_environment(names)
+
+
 def find_claude_binary() -> str | None:
-    """Find the Claude CLI binary (claude-code-acp or claude)."""
-    return find_binary(["claude-code-acp", "claude"])
+    """Find a Claude ACP bridge, preferring the current package name."""
+    return find_binary(["claude-agent-acp", "claude-code-acp"])
 
 
 def find_gemini_binary() -> str | None:
@@ -53,8 +125,8 @@ def find_openclaw_binary() -> str | None:
 
 
 def find_cursor_binary() -> str | None:
-    """Find the Cursor CLI binary (cursor-agent or agent)."""
-    return find_binary(["cursor-agent", "agent"])
+    """Find the official Cursor CLI binary."""
+    return find_binary(["cursor-agent"])
 
 
 def find_codex_binary() -> str | None:

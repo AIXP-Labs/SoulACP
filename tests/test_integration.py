@@ -1,6 +1,6 @@
 """Integration tests — require Claude Code CLI installed.
 
-Run with: pytest tests/test_integration.py -v
+Run with: pytest --run-integration tests/test_integration.py -v
 Skip if Claude Code not available.
 """
 
@@ -20,7 +20,7 @@ def config():
 
     return ACPConfig(
         provider="claude",
-        model="claude-sonnet-4-20250514",
+        model="claude-acp/sonnet",
         timeout_connect=30,
         timeout_prompt=60,
     )
@@ -133,7 +133,7 @@ def test_multi_turn(config, client_class):
 
 
 def test_model_selection(client_class):
-    """Test that model can be set per-session via session/set_model RPC."""
+    """Test that the configured model can be selected for a session."""
     from soulacp import ACPConfig, ACPConnectionPool
 
     config = ACPConfig(
@@ -147,9 +147,7 @@ def test_model_selection(client_class):
         pool = ACPConnectionPool(config, client_class)
         try:
             async with pool.acquire() as (client, session_id):
-                response = await client.query(
-                    "What model are you? Reply in ONE short sentence."
-                )
+                response = await client.query("What model are you? Reply in ONE short sentence.")
                 assert len(response) > 0
         finally:
             await pool.close_all()
@@ -209,7 +207,7 @@ def test_session_resume(config, client_class):
     """Test that session/resume RPC can restore a previous Claude session id.
 
     Structural test — verifies the resume RPC works at the protocol level.
-    Whether claude-code-acp restores full context depends on its version.
+    Whether claude-agent-acp restores full context depends on its version.
     """
     from soulacp import ACPConnectionPool
 
@@ -229,7 +227,7 @@ def test_session_resume(config, client_class):
             ok = await client2.resume(sid1)
             await client2.disconnect()
 
-            # resume may return False if claude-code-acp doesn't keep
+            # resume may return False if claude-agent-acp doesn't keep
             # cross-process state. The test verifies the call doesn't crash.
             assert isinstance(ok, bool), f"resume() should return bool, got {ok!r}"
         finally:

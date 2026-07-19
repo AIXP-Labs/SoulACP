@@ -1,6 +1,6 @@
 """Integration tests for Minion Code ACP adapter.
 
-Run with: pytest tests/test_integration_minion.py -v
+Run with: pytest --run-integration tests/test_integration_minion.py -v
 Skip if minion-code not available.
 """
 

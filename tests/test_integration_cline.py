@@ -1,6 +1,6 @@
 """Integration tests for Cline ACP adapter.
 
-Run with: pytest tests/test_integration_cline.py -v
+Run with: pytest --run-integration tests/test_integration_cline.py -v
 Skip if cline not available.
 """
 

@@ -1,6 +1,6 @@
 """Integration tests for Amp ACP adapter.
 
-Run with: pytest tests/test_integration_amp.py -v
+Run with: pytest --run-integration tests/test_integration_amp.py -v
 Skip if not available.
 """
 

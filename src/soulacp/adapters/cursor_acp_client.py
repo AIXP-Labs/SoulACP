@@ -9,7 +9,7 @@ from soulacp.adapters.base_client import ACPClientBase
 from soulacp.binary import find_cursor_binary
 from soulacp.meta import CLIENT_NAME, __version__
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class CursorACPClient(ACPClientBase):
@@ -50,17 +50,7 @@ class CursorACPClient(ACPClientBase):
         # NOTE: Using Gemini pattern {"methodId": ...} rather than Codex
         # pattern {"authMethod": ..., "credentials": {...}}, because Cursor
         # is more likely to use OAuth login (like Gemini) than API keys.
-        auth_methods = result.get("authMethods", [])
-        if auth_methods:
-            method_id = auth_methods[0].get("id", "oauth-personal")
-            try:
-                await self._rpc(
-                    "authenticate",
-                    {"methodId": method_id},
-                    timeout=self.config.timeout_connect,
-                )
-            except Exception as e:
-                logger.warning("Cursor authenticate failed: %s", e)
+        await self._authenticate_if_advertised(result, agent_name="Cursor")
 
         # 3. session/new
         res = await self._rpc(
@@ -74,35 +64,13 @@ class CursorACPClient(ACPClientBase):
         self.session_id = res.get("sessionId") or res.get("session_id")
         if not self.session_id:
             raise ConnectionError("session/new did not return sessionId")
-        logger.info("Cursor ACP connected: session=%s", self.session_id)
+        logger.info("Cursor ACP session established")
 
         # 4. set model (optional)
-        model_id = self.config.model.split("/")[-1] if self.config.model else None
+        model_id = self._configured_model_id()
         if model_id and model_id != "default":
-            try:
-                await self._rpc(
-                    "session/set_model",
-                    {"sessionId": self.session_id, "modelId": model_id},
-                    timeout=self.config.timeout_connect,
-                )
-                logger.info("Cursor model set to: %s", model_id)
-            except Exception as e:
-                logger.warning("session/set_model not supported, skipping: %s", e)
+            await self._set_model_if_supported(model_id)
 
     async def resume(self, session_id: str) -> bool:
         """Resume a previous Cursor ACP session."""
-        try:
-            await self._rpc(
-                "session/resume",
-                {
-                    "sessionId": session_id,
-                    "cwd": self.config.cwd or os.getcwd(),
-                },
-                timeout=self.config.timeout_connect,
-            )
-            self.session_id = session_id
-            logger.info("Cursor session resumed: %s", session_id)
-            return True
-        except Exception as e:
-            logger.debug("Cursor session resume failed for %s: %s", session_id, e)
-            return False
+        return await self._resume_if_available("session/resume", session_id, agent_name="Cursor")

@@ -10,7 +10,7 @@
 >
 > 此政策未来会重新审视。
 
-> **阶段状态（v0.1.x）**
+> **阶段状态（v0.2.x）**
 >
 > SoulACP 处于早期开发阶段。下方流程描述的是**目标**开发模型。初期决策由 AIXP Labs 核心维护者做出；社区讨论窗口将随贡献者基数增长而扩大。
 
@@ -46,10 +46,18 @@
 ### 质量标准
 
 - 所有新代码必须包含测试（单元 + 集成测试，在可行时）
-- 代码风格：`ruff`（配置见 `pyproject.toml`）
-- 必须含类型注解（`py.typed` 包）
+- 单元测试：`python -m pytest tests/ -W error -q`
+- 最低支持开发工具链：`python -m pip install -e ".[dev]" -c requirements-min.txt`
+- 仓库 hook：首次运行 `pre-commit install`，之后使用 `pre-commit run --all-files` 校验整个 checkout
+- 覆盖率同时统计语句和分支；项目配置的阈值作用于二者的综合结果
+- 代码风格：`python -m ruff check src/soulacp/ tests/ examples/` 和 `python -m ruff format --check src/soulacp/ tests/ examples/`
+- 必须含类型注解（`py.typed` 包）；使用 `python -m pyright` 与
+  `PYTHONPATH=src python -m pyright --verifytypes soulacp --ignoreexternal` 验证
+  （PowerShell 在第二条命令前设置 `$env:PYTHONPATH = "src"`）
+- 安全扫描：`python -m bandit -q -r src/soulacp`
+- 分发构建：先运行 `python -m build`，再运行 `python -m twine check dist/*`
 - 向后兼容的 API 变更（minor 版本间不破坏）
-- 零外部依赖（仅标准库）
+- 不引入必需的 runtime 依赖；OpenTelemetry API 保持可选
 
 ### 双语要求
 
@@ -67,4 +75,4 @@ Copyright 2026 AIXP Labs AIXP.dev | SoulACP.dev
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.1.2. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.0. www.soulacp.dev

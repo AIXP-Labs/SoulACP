@@ -18,8 +18,8 @@ from soulacp.config import ACPConfig
 class ACPClient(Protocol):
     """Structural interface every ACP client must satisfy.
 
-    Both ``ACPClientBase`` subclasses (Claude, Gemini, OpenCode, OpenClaw,
-    Codex, Qwen, Kimi, Cursor, Codebuddy, Cline, Copilot, Minion, Vibe, Nova, Crow) and the legacy ``CursorCLIClient`` conform to this protocol.
+    All registered ``ACPClientBase`` adapters and the standalone legacy
+    ``CursorCLIClient`` conform to this protocol.
     """
 
     config: ACPConfig

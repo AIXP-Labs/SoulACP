@@ -7,9 +7,10 @@ import os
 
 from soulacp.adapters.base_client import ACPClientBase
 from soulacp.binary import find_kimi_binary
+from soulacp.errors import ACPProtocolError
 from soulacp.meta import CLIENT_NAME, __version__
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class KimiACPClient(ACPClientBase):
@@ -27,8 +28,7 @@ class KimiACPClient(ACPClientBase):
         binary = find_kimi_binary()
         if not binary:
             raise FileNotFoundError(
-                "Kimi CLI not found. Download from: "
-                "https://github.com/MoonshotAI/kimi-cli/releases"
+                "Kimi CLI not found. Download from: https://github.com/MoonshotAI/kimi-cli/releases"
             )
         return [binary, "acp"]
 
@@ -48,30 +48,23 @@ class KimiACPClient(ACPClientBase):
             timeout=self.config.timeout_connect,
         )
 
-        # 2. authenticate (if required by server)
-        # NOTE: authenticate params vary by provider:
-        #   Gemini uses {"methodId": ...}
-        #   Codex  uses {"authMethod": ..., "credentials": {...}}
-        # Kimi actual format TBD — using Codex pattern with credentials.
+        # 2. Kimi advertises a login check even for persisted credentials.
+        # Authentication itself is completed beforehand with `kimi login`.
         auth_methods = result.get("authMethods", [])
+        if not isinstance(auth_methods, list):
+            raise ACPProtocolError("Kimi initialize authMethods must be an array")
         if auth_methods:
-            api_key = os.environ.get("MOONSHOT_API_KEY", "")
-            if not api_key:
-                logger.warning(
-                    "Kimi requires authentication but MOONSHOT_API_KEY is not set"
-                )
-            method_id = auth_methods[0].get("id", "api_key")
-            try:
-                await self._rpc(
-                    "authenticate",
-                    {
-                        "authMethod": method_id,
-                        "credentials": {"api_key": api_key},
-                    },
-                    timeout=self.config.timeout_connect,
-                )
-            except Exception as e:
-                logger.warning("Kimi authenticate failed: %s", e)
+            first_method = auth_methods[0]
+            if not isinstance(first_method, dict):
+                raise ACPProtocolError("Kimi initialize authMethods entries must be objects")
+            method_id = first_method.get("id")
+            if not isinstance(method_id, str) or not method_id:
+                raise ACPProtocolError("Kimi initialize auth method requires a non-empty id")
+            await self._rpc(
+                "authenticate",
+                {"methodId": method_id},
+                timeout=self.config.timeout_connect,
+            )
 
         # 3. session/new
         res = await self._rpc(
@@ -85,35 +78,13 @@ class KimiACPClient(ACPClientBase):
         self.session_id = res.get("sessionId") or res.get("session_id")
         if not self.session_id:
             raise ConnectionError("session/new did not return sessionId")
-        logger.info("Kimi connected: session=%s", self.session_id)
+        logger.info("Kimi session established")
 
         # 4. set model (optional, graceful degradation)
-        model_id = self.config.model.split("/")[-1] if self.config.model else None
+        model_id = self._configured_model_id()
         if model_id and model_id != "default":
-            try:
-                await self._rpc(
-                    "session/set_model",
-                    {"sessionId": self.session_id, "modelId": model_id},
-                    timeout=self.config.timeout_connect,
-                )
-                logger.info("Kimi model set to: %s", model_id)
-            except Exception as e:
-                logger.warning("session/set_model not supported, skipping: %s", e)
+            await self._set_model_if_supported(model_id)
 
     async def resume(self, session_id: str) -> bool:
         """Resume a previous Kimi session."""
-        try:
-            await self._rpc(
-                "session/resume",
-                {
-                    "sessionId": session_id,
-                    "cwd": self.config.cwd or os.getcwd(),
-                },
-                timeout=self.config.timeout_connect,
-            )
-            self.session_id = session_id
-            logger.info("Kimi session resumed: %s", session_id)
-            return True
-        except Exception as e:
-            logger.debug("Kimi session resume failed for %s: %s", session_id, e)
-            return False
+        return await self._resume_if_available("session/resume", session_id, agent_name="Kimi")

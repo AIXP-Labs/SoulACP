@@ -3,23 +3,22 @@
 from __future__ import annotations
 
 import logging
-import os
 
 from soulacp.adapters.base_client import ACPClientBase
 from soulacp.binary import find_codex_binary
 from soulacp.meta import CLIENT_NAME, __version__
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class CodexACPClient(ACPClientBase):
     """ACP client for OpenAI Codex via codex-acp adapter.
 
     Requires:
-        - codex-acp binary (``npm install -g @zed-industries/codex-acp``)
+        - codex-acp binary (``npm install -g @agentclientprotocol/codex-acp``)
         - One of:
             (a) ``codex login`` (ChatGPT account auth — recommended,
-                exposes gpt-5.5 and other ChatGPT-only models)
+                exposes the models enabled for that account)
             (b) ``OPENAI_API_KEY`` env var (API-key auth — codex-acp
                 picks it up automatically from environment)
 
@@ -37,7 +36,8 @@ class CodexACPClient(ACPClientBase):
            ACPConfig(provider="codex", model="codex-acp/gpt-5.5",
                      extra_args=["-c", 'model_reasoning_effort="high"'])
 
-    2. ``CODEX_REASONING_EFFORT`` env var (e.g. via ``.env``)::
+    2. ``CODEX_REASONING_EFFORT`` in ``ACPConfig.extra_env`` or the process
+       environment::
 
            # In .env or shell:
            CODEX_REASONING_EFFORT=high
@@ -76,22 +76,19 @@ class CodexACPClient(ACPClientBase):
     def _get_acp_command(self) -> list[str]:
         binary = find_codex_binary()
         if not binary:
-            raise FileNotFoundError(
-                "codex-acp not found. Install with: "
-                "npm install -g @zed-industries/codex-acp"
-            )
+            raise FileNotFoundError("codex-acp not found. Install with: npm install -g @agentclientprotocol/codex-acp")
         cmd = [binary]
 
         # Reasoning effort resolution (precedence high → low):
         #   1. user's extra_args (-c model_reasoning_effort=...)  — explicit Python override
-        #   2. CODEX_REASONING_EFFORT env var                     — .env / shell control
+        #   2. CODEX_REASONING_EFFORT child env                   — config / shell control
         #   3. default "medium"                                    — OpenAI's recommended balance
         #
         # 5 levels per Codex config-reference (https://developers.openai.com/codex/config-reference):
         #   minimal / low / medium / high / xhigh
         user_args_str = " ".join(self.config.extra_args or [])
         if "model_reasoning_effort" not in user_args_str:
-            effort = os.environ.get("CODEX_REASONING_EFFORT", "medium").strip()
+            effort = (self._child_env_value("CODEX_REASONING_EFFORT", "medium") or "").strip()
             if effort:
                 cmd.extend(["-c", f'model_reasoning_effort="{effort}"'])
 
@@ -104,7 +101,7 @@ class CodexACPClient(ACPClientBase):
         # than anything we'd inject. Set CODEX_SANDBOX_MODE explicitly to
         # opt into write permissions.
         if "sandbox_mode" not in user_args_str:
-            sandbox = os.environ.get("CODEX_SANDBOX_MODE", "").strip()
+            sandbox = (self._child_env_value("CODEX_SANDBOX_MODE", "") or "").strip()
             if sandbox:
                 cmd.extend(["-c", f'sandbox_mode="{sandbox}"'])
 
@@ -114,7 +111,7 @@ class CodexACPClient(ACPClientBase):
         #   on-request (model decides)
         #   never (NEVER ask — equivalent to Claude --permission-mode dontAsk)
         if "approval_policy" not in user_args_str:
-            approval = os.environ.get("CODEX_APPROVAL_POLICY", "").strip()
+            approval = (self._child_env_value("CODEX_APPROVAL_POLICY", "") or "").strip()
             if approval:
                 cmd.extend(["-c", f'approval_policy="{approval}"'])
 
@@ -125,7 +122,7 @@ class CodexACPClient(ACPClientBase):
         # silently ignores when sandbox_mode == "read-only" or
         # "danger-full-access" — the latter has network on by default).
         if "sandbox_workspace_write.network_access" not in user_args_str:
-            net = os.environ.get("CODEX_NETWORK_ACCESS", "").strip().lower()
+            net = (self._child_env_value("CODEX_NETWORK_ACCESS", "") or "").strip().lower()
             if net in ("true", "1", "yes"):
                 cmd.extend(["-c", "sandbox_workspace_write.network_access=true"])
 
@@ -164,28 +161,15 @@ class CodexACPClient(ACPClientBase):
         self.session_id = result.get("sessionId") or result.get("session_id")
         if not self.session_id:
             raise ConnectionError("session/new did not return sessionId")
-        logger.info("Codex connected: session=%s", self.session_id)
+        logger.info("Codex session established")
 
         # 4. session/set_model — set per-session model (mirrors Claude pattern).
         #    Model id format: "codex-acp/gpt-5.5" → strip prefix → "gpt-5.5".
-        #    Available with ChatGPT auth: gpt-5.5 (recommended).
-        #    Available with API key: gpt-5.5-codex / o3 / o4-mini / etc.
-        model_id = self.config.model.split("/")[-1] if self.config.model else None
+        #    Availability depends on the active ChatGPT or API credentials;
+        #    gpt-5.5 is a compatibility example, not a hard-coded default.
+        model_id = self._configured_model_id()
         if model_id:
-            try:
-                await self._rpc(
-                    "session/set_model",
-                    {
-                        "sessionId": self.session_id,
-                        "modelId": model_id,
-                    },
-                    timeout=self.config.timeout_connect,
-                )
-                logger.info("Codex model set to: %s", model_id)
-            except Exception as e:
-                logger.warning(
-                    "session/set_model not supported, falling back to config.toml default: %s", e
-                )
+            await self._set_model_if_supported(model_id)
 
     async def resume(self, session_id: str) -> bool:
         """Resume a previous Codex session via session/load.
@@ -193,18 +177,4 @@ class CodexACPClient(ACPClientBase):
         Per ACP 1.0 spec, session/load requires cwd + mcpServers params
         (same shape as session/new).
         """
-        try:
-            await self._rpc(
-                "session/load",
-                {
-                    "sessionId": session_id,
-                    "cwd": self.config.cwd,
-                    "mcpServers": [],
-                },
-                timeout=self.config.timeout_connect,
-            )
-            self.session_id = session_id
-            return True
-        except Exception as e:
-            logger.debug("Codex session resume failed for %s: %s", session_id, e)
-            return False
+        return await self._resume_if_available("session/load", session_id, agent_name="Codex")
