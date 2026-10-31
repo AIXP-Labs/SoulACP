@@ -8,6 +8,7 @@ import math
 import os
 import re
 from dataclasses import dataclass, field
+from ipaddress import IPv4Address, ip_address
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
@@ -71,6 +72,19 @@ def _validate_name_value_entries(
             raise ValueError(f"{label}[{index}].value must not contain CR or LF")
 
 
+def _validate_bracketed_url_host(netloc: str, hostname: str | None) -> None:
+    """Require IP literals even on Python versions with permissive URL parsing."""
+    if "[" not in netloc:
+        return
+    if not hostname:
+        raise ValueError("Invalid bracketed URL host")
+    if hostname.startswith("v"):
+        if re.fullmatch(r"v[a-fA-F0-9]+\..+", hostname) is None:
+            raise ValueError("Invalid IPvFuture URL host")
+    elif isinstance(ip_address(hostname), IPv4Address):
+        raise ValueError("IPv4 URL hosts must not use brackets")
+
+
 def _validate_remote_mcp_url(value: Any, label: str) -> str:
     url = _require_non_empty_string(value, label)
     if url != url.strip():
@@ -80,6 +94,7 @@ def _validate_remote_mcp_url(value: Any, label: str) -> str:
     try:
         parsed = urlsplit(url)
         port = parsed.port
+        _validate_bracketed_url_host(parsed.netloc, parsed.hostname)
     except ValueError:
         raise ValueError(f"{label} must be a valid HTTP(S) URL") from None
     if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname or (port is not None and port < 1):

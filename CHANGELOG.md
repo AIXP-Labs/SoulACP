@@ -18,6 +18,10 @@ they are not current installation or replay-safety instructions. Use the current
 README and CONTRIBUTING for supported commands and verification scope.
 
 ### Fixed
+- Validate bracketed URL hosts explicitly for MCP HTTP/SSE endpoints and the
+  OpenClaw Gateway instead of relying on patch-version-dependent `urlsplit`
+  rejection. Preserve valid IP-literal URLs and redacted parser diagnostics on
+  Python 3.10.11 as well as later supported interpreters.
 - Use safe default display chains for wrapped response failures and earlier
   fallback errors. Retain original diagnostic objects in `cause` and
   `primary_cause`; `__cause__` is no longer their identity-bearing interface.

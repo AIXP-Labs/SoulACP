@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 
 from soulacp.adapters.base_client import ACPClientBase, RPCError
 from soulacp.binary import find_openclaw_binary
+from soulacp.config import _validate_bracketed_url_host
 from soulacp.meta import CLIENT_NAME, __version__
 from soulacp.privacy import exception_summary
 
@@ -41,6 +42,7 @@ def _validate_gateway_url(url: str) -> str:
         port = parsed.port
         username = parsed.username
         password = parsed.password
+        _validate_bracketed_url_host(parsed.netloc, parsed.hostname)
     except ValueError:
         raise ValueError("OPENCLAW_URL must be a valid WebSocket URL") from None
     if username is not None or password is not None:
