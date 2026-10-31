@@ -41,8 +41,8 @@ def _validate_gateway_url(url: str) -> str:
         port = parsed.port
         username = parsed.username
         password = parsed.password
-    except ValueError as exc:
-        raise ValueError("OPENCLAW_URL must be a valid WebSocket URL") from exc
+    except ValueError:
+        raise ValueError("OPENCLAW_URL must be a valid WebSocket URL") from None
     if username is not None or password is not None:
         raise ValueError("OPENCLAW_URL must not contain embedded credentials")
     if parsed.scheme.lower() not in {"ws", "wss"} or not parsed.hostname or (port is not None and port < 1):

@@ -725,7 +725,9 @@ async def test_fallback_unknown_outcome_is_not_hidden_by_primary_error():
         await session.query("run side effect")
 
     assert exc_info.value is fallback_error
-    assert exc_info.value.__cause__ is primary_error
+    assert exc_info.value.primary_cause is primary_error
+    assert exc_info.value.__cause__ is not primary_error
+    assert "primary CLI missing" not in str(exc_info.value.__cause__)
 
 
 @pytest.mark.asyncio
@@ -749,7 +751,9 @@ async def test_fallback_transport_failure_after_prompt_start_is_outcome_unknown(
         await session.query("run side effect")
 
     assert exc_info.value.cause is fallback_error
-    assert exc_info.value.__cause__ is primary_error
+    assert exc_info.value.primary_cause is primary_error
+    assert exc_info.value.__cause__ is not primary_error
+    assert "primary CLI missing" not in str(exc_info.value.__cause__)
 
 
 class SlowClosePool:

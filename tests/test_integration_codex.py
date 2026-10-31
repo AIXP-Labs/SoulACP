@@ -18,7 +18,7 @@ from soulacp.binary import find_codex_binary
 # Auth is handled implicitly by codex-acp via ~/.codex/auth.json or env var.
 pytestmark = pytest.mark.skipif(
     find_codex_binary() is None,
-    reason="codex-acp not installed (npm install -g @agentclientprotocol/codex-acp)",
+    reason='codex-acp not installed (npm install -g "@agentclientprotocol/codex-acp@>=2.1.1")',
 )
 
 

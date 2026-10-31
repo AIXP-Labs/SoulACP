@@ -1,4 +1,8 @@
-"""Multi-agent example — use different agents for different tasks."""
+"""Sequential provider calls, not nested-agent dispatch or workflow authorization.
+
+Requires separately installed/authenticated CLIs and available models. Run only
+with synthetic input; stdout contains original responses, not redacted diagnostics.
+"""
 
 import asyncio
 

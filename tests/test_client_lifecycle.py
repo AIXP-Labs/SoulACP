@@ -7,8 +7,12 @@ import copy
 import gc
 import io
 import json
+import os as _os
+import subprocess as _subprocess
 import sys
 import threading
+import time as _time
+from contextlib import suppress as _suppress
 
 import pytest
 
@@ -5712,3 +5716,181 @@ async def test_cursor_startup_obeys_connect_timeout_and_cleans_temp_file(monkeyp
     release_spawn.set()
     await client.disconnect()
     assert process.terminate_calls == 1
+
+
+# --- Process-tree termination on disconnect; synthetic CLI and tool fixtures. ---
+
+
+def _pid_alive(pid: int) -> bool:
+    if sys.platform == "win32":
+        out = _subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+        return f" {pid} " in out
+    try:
+        _os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+@pytest.mark.asyncio
+async def test_disconnect_terminates_the_process_tree_before_the_parent(monkeypatch, tmp_path):
+    process = FakeProcess()
+    seen: list[tuple[object, int]] = []
+
+    async def fake_tree(proc, descendants=None):
+        # runs before terminate(); it receives the descendants recorded at the start of
+        # the disconnect (the CLI may already have exited on stdin EOF by now)
+        seen.append((proc, proc.terminate_calls, descendants))
+        return "recorded"
+
+    async def fake_create_subprocess_exec(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(base_client_module, "_terminate_process_tree", fake_tree)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    client = InitializeFailureClient(make_config(cwd=str(tmp_path)))
+
+    with pytest.raises(RuntimeError, match="initialize failed"):
+        await client.connect()
+
+    # a fake process is never snapshotted (no live pid), so the recorded set is empty
+    assert seen == [(process, 0, set())]
+    assert process.terminate_calls == 1 and process.stdin.closed and client.process is None
+
+
+def test_snapshot_descendants_skips_fakes_and_missing_pids():
+    assert base_client_module._snapshot_descendants(None) == set()
+    assert base_client_module._snapshot_descendants(0) == set()
+
+
+@pytest.mark.asyncio
+async def test_terminate_process_tree_skips_fakes_and_exited_processes():
+    assert await base_client_module._terminate_process_tree(FakeProcess()) is None
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        "pass",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    await proc.wait()
+    assert await base_client_module._terminate_process_tree(proc) is None
+
+
+def test_process_group_kwargs_follow_the_platform():
+    kwargs = base_client_module._process_group_kwargs()
+    if sys.platform == "win32":
+        assert kwargs == {}
+    else:
+        assert kwargs == {"start_new_session": True}
+
+
+@pytest.mark.asyncio
+async def test_terminate_process_tree_kills_the_grandchild_of_a_live_cli():
+    """A stand-in CLI spawns a long-running tool (its grandchild from our point of view); taking the tree down must end
+    the tool within seconds even though only the CLI's pid is known."""
+    script = (
+        "import subprocess, sys, time\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+        "print(child.pid, flush=True)\n"
+        "time.sleep(120)\n"
+    )
+    parent = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        script,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+        **base_client_module._process_group_kwargs(),
+    )
+    try:
+        line = await asyncio.wait_for(parent.stdout.readline(), timeout=30)
+        grandchild = int(line.strip())
+        assert _pid_alive(grandchild)
+
+        outcome = await base_client_module._terminate_process_tree(parent)
+        assert outcome is not None and "failed" not in outcome
+
+        if parent.returncode is None:
+            with _suppress(ProcessLookupError):
+                parent.terminate()
+        await asyncio.wait_for(parent.wait(), timeout=10)
+        deadline = _time.monotonic() + 5.0
+        while _pid_alive(grandchild) and _time.monotonic() < deadline:
+            await asyncio.sleep(0.1)
+        assert not _pid_alive(grandchild)
+    finally:
+        if parent.returncode is None:
+            with _suppress(ProcessLookupError):
+                parent.kill()
+            await parent.wait()
+        with _suppress(Exception):
+            await asyncio.wait_for(parent.stdout.read(), timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_descendants_are_terminated_after_the_cli_exited():
+    """The live failure mode: the CLI is gone before any tree walk runs, leaving the tool it spawned as an orphan.
+    Windows keeps the orphan's parent id, so the walk from the CLI's pid still finds it; POSIX reaches it through
+    the CLI's process group. Either way the orphan must be terminated."""
+    script = (
+        "import os, subprocess, sys\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+        "print(os.getpid(), flush=True)\n"
+        "print(child.pid, flush=True)\n"  # then exit at once, orphaning the child
+    )
+    # Windows venv redirectors insert a short-lived interpreter between this
+    # Process and the tool. Exercise the intended direct-parent contract, not
+    # an already-missing intermediate link that a live snapshot cannot prove.
+    executable = getattr(sys, "_base_executable", sys.executable) if sys.platform == "win32" else sys.executable
+    parent = await asyncio.create_subprocess_exec(
+        executable,
+        "-c",
+        script,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+        **base_client_module._process_group_kwargs(),
+    )
+    grandchild = None
+    try:
+        parent_line = await asyncio.wait_for(parent.stdout.readline(), timeout=30)
+        line = await asyncio.wait_for(parent.stdout.readline(), timeout=30)
+        grandchild = int(line.strip())
+        assert int(parent_line.strip()) == parent.pid
+        # Process.wait() only resolves once every pipe is closed, and the orphan still
+        # holds the inherited stdout pipe: poll the exit code instead.
+        deadline = _time.monotonic() + 10.0
+        while parent.returncode is None and _time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+        assert parent.returncode is not None and _pid_alive(grandchild)
+        recorded = base_client_module._snapshot_descendants(parent.pid)
+        if sys.platform == "win32":
+            assert grandchild in recorded
+
+        outcome = await base_client_module._terminate_process_tree(parent, recorded)
+        assert outcome is not None and "failed" not in outcome
+        deadline = _time.monotonic() + 5.0
+        while _pid_alive(grandchild) and _time.monotonic() < deadline:
+            await asyncio.sleep(0.1)
+        assert not _pid_alive(grandchild)
+    finally:
+        if grandchild is not None and _pid_alive(grandchild):
+            if sys.platform == "win32":
+                _subprocess.run(["taskkill", "/F", "/PID", str(grandchild)], capture_output=True, check=False)
+            else:
+                with _suppress(ProcessLookupError):
+                    _os.kill(grandchild, 9)
+        if parent.returncode is None:
+            with _suppress(ProcessLookupError):
+                parent.kill()
+            await parent.wait()
+        with _suppress(Exception):
+            await asyncio.wait_for(parent.stdout.read(), timeout=5)

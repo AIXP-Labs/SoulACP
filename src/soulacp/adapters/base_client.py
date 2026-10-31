@@ -16,7 +16,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from soulacp._async import wait_for_owned
 from soulacp._json import strict_json_loads
@@ -41,7 +41,7 @@ from soulacp.errors import (
     ACPStreamTimeoutError,
     ACPUnsupportedCapabilityError,
 )
-from soulacp.privacy import exception_summary, sensitive_logging_enabled
+from soulacp.privacy import _bind_private_cause, _raise_private_cause, exception_summary, sensitive_logging_enabled
 from soulacp.services.fs_service import FSService
 from soulacp.services.terminal_service import TerminalService
 from soulacp.telemetry import telemetry_provider_name
@@ -49,6 +49,166 @@ from soulacp.telemetry import telemetry_provider_name
 from ._session_updates import validate_permission_tool_call, validate_stable_session_update
 
 logger: logging.Logger = logging.getLogger(__name__)
+
+
+def _process_group_kwargs() -> dict[str, Any]:
+    """Spawn keywords that make the CLI's tools reachable for termination.
+
+    POSIX: the CLI gets its own session / process group, so ``os.killpg`` can
+    reach tools still in that group after the CLI itself has exited. Windows: the
+    descendants are recorded with a Toolhelp32 snapshot before the CLI is told to
+    stop (see ``_snapshot_descendants``), so no creation flag is needed.
+    This is best-effort cleanup, not containment or proof of whole-tree exit.
+    """
+    if sys.platform == "win32":
+        return {}
+    return {"start_new_session": True}
+
+
+def _win_parent_map() -> dict[int, int]:
+    """pid -> parent pid for every process, from a Toolhelp32 snapshot (Windows only)."""
+    import ctypes
+    import ctypes.wintypes as wt
+
+    class _Entry(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wt.DWORD),
+            ("cntUsage", wt.DWORD),
+            ("th32ProcessID", wt.DWORD),
+            ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", wt.DWORD),
+            ("cntThreads", wt.DWORD),
+            ("th32ParentProcessID", wt.DWORD),
+            ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", wt.DWORD),
+            ("szExeFile", ctypes.c_char * 260),
+        ]
+
+    kernel32 = cast(Any, ctypes).windll.kernel32
+    kernel32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+    kernel32.CreateToolhelp32Snapshot.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+    kernel32.Process32First.argtypes = [ctypes.c_void_p, ctypes.POINTER(_Entry)]
+    kernel32.Process32Next.argtypes = [ctypes.c_void_p, ctypes.POINTER(_Entry)]
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
+    if not snapshot or snapshot == ctypes.c_void_p(-1).value:
+        raise OSError("CreateToolhelp32Snapshot failed")
+    parents: dict[int, int] = {}
+    try:
+        entry = _Entry()
+        entry.dwSize = ctypes.sizeof(_Entry)
+        ok = kernel32.Process32First(snapshot, ctypes.byref(entry))
+        while ok:
+            parents[int(entry.th32ProcessID)] = int(entry.th32ParentProcessID)
+            ok = kernel32.Process32Next(snapshot, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snapshot)
+    return parents
+
+
+def _snapshot_descendants(pid: int | None) -> set[int]:
+    """Return Windows descendants observed in a snapshot, or empty on failure.
+
+    Empty is not proof of whole-tree exit. POSIX uses the process group instead.
+    """
+    if sys.platform != "win32" or not pid:
+        return set()
+    try:
+        parents = _win_parent_map()
+    except OSError:
+        return set()
+    found: set[int] = set()
+    frontier = {int(pid)}
+    while frontier:
+        nxt = {child for child, parent in parents.items() if parent in frontier and child not in found and child != pid}
+        found |= nxt
+        frontier = nxt
+    return found
+
+
+def _win_terminate_descendants(pids: set[int], root: int) -> list[int]:
+    """Terminate the recorded descendants that still belong to the CLI's chain (Windows only).
+
+    A recorded pid is terminated only while its current parent is the CLI or another
+    recorded pid. This reduces accidental targeting, but a parent-PID snapshot
+    is not a race-free process identity or lifetime proof.
+    """
+    import ctypes
+
+    kernel32 = cast(Any, ctypes).windll.kernel32
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+    kernel32.TerminateProcess.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    try:
+        parents = _win_parent_map()
+    except OSError:
+        return []
+    chain = set(pids) | {int(root)}
+    killed: list[int] = []
+    for pid in sorted(pids):
+        if parents.get(pid) not in chain:
+            continue
+        handle = kernel32.OpenProcess(0x0001, False, pid)  # PROCESS_TERMINATE
+        if not handle:
+            continue
+        try:
+            if kernel32.TerminateProcess(handle, 1):
+                killed.append(pid)
+        finally:
+            kernel32.CloseHandle(handle)
+    return killed
+
+
+async def _terminate_process_tree(
+    proc: asyncio.subprocess.Process,
+    descendants: set[int] | None = None,
+) -> str | None:
+    """Best-effort termination of the CLI's tools (shell -> long command).
+
+    Terminating only the CLI leaves the tools it spawned running as orphans:
+    ``TerminateProcess`` never touches children on Windows and ``SIGTERM`` to the
+    parent alone does not either on POSIX. Windows terminates the descendants
+    recorded before the CLI was told to stop (or a fresh snapshot while the CLI is
+    still alive, or after it exited: Windows keeps an orphan's parent id, so the
+    walk can still find recorded tools); POSIX signals the CLI's
+    process group, which can outlive the CLI. Detached processes, snapshot/PID
+    races, permissions, and unobserved exits prevent a general guarantee.
+    Only a real
+    ``asyncio.subprocess.Process`` is handled; test fakes are skipped. Returns a
+    short description (pids and counts only, never a command line) or ``None`` when
+    nothing was attempted. Expected OS termination errors are handled locally;
+    the returned summary is not independent proof that all descendants exited.
+    """
+    if not isinstance(proc, asyncio.subprocess.Process):
+        return None
+    pid = proc.pid
+    try:
+        if sys.platform == "win32":
+            pids = set(descendants or ())
+            if not pids:
+                pids = _snapshot_descendants(pid)
+            if not pids:
+                return None
+            killed = _win_terminate_descendants(pids, pid)
+            return f"terminated {len(killed)} of {len(pids)} recorded descendants of pid {pid}"
+        import signal
+
+        # spawned with _process_group_kwargs the CLI leads its own group (pgid == pid),
+        # which outlives the CLI itself, so an exited parent still names the group
+        pgid = os.getpgid(pid) if proc.returncode is None else int(pid)
+        if pgid == os.getpgid(0):
+            # not in its own group (spawned without _process_group_kwargs):
+            # never signal the group we belong to ourselves
+            return None
+        os.killpg(pgid, signal.SIGTERM)
+        return f"SIGTERM sent to process group {pgid} of pid {pid}"
+    except ProcessLookupError:
+        # the CLI and its process group are already gone: nothing left to terminate
+        return None
+    except (PermissionError, OSError) as exc:
+        return f"process tree termination failed for pid {pid}: {exception_summary(exc)}"
+
 
 _STREAM_ACTIVITY = object()
 MAX_RESPONSE_CHARS = 10 * 1024 * 1024
@@ -77,6 +237,11 @@ class _SessionStateSnapshot:
     info: dict[str, Any]
     usage: dict[str, Any] | None
     available_commands: list[dict[str, Any]]
+
+
+@dataclass(slots=True)
+class _PermissionTurnState:
+    cancelled: bool = False
 
 
 def _encode_json_line(payload: dict[str, Any]) -> bytes:
@@ -117,6 +282,7 @@ class RPCError(Exception):
     elapsed_ms: float | None
     stderr_tail: list[str]
     session_id: str | None
+    primary_cause: BaseException | None = None
 
     _STANDARD_MESSAGES = frozenset(
         {
@@ -238,22 +404,34 @@ class _SafeSpanCM:
     def __init__(self, delegate: Any) -> None:
         self._delegate = delegate
         self._entered = False
+        self._span: Any = None
 
     def __enter__(self) -> Any | None:
         try:
             span = self._delegate.__enter__()
-        except Exception as exc:
+        except Exception:
             with suppress(Exception):
-                self._delegate.__exit__(type(exc), exc, exc.__traceback__)
+                self._delegate.__exit__(None, None, None)
             return None
         self._entered = True
+        self._span = span
         return span
 
     def __exit__(self, *args: Any) -> bool:
         if not self._entered:
             return False
+        if len(args) > 1 and args[1] is not None:
+            with suppress(Exception):
+                from opentelemetry.trace import Status, StatusCode  # pyright: ignore[reportMissingImports]
+
+                self._span.set_status(Status(StatusCode.ERROR))
+                self._span.set_attribute(
+                    "error.type", "cancelled" if isinstance(args[1], asyncio.CancelledError) else "error"
+                )
         with suppress(Exception):
-            self._delegate.__exit__(*args)
+            # SDK context managers otherwise record the original exception and
+            # its raw cause/stack automatically, bypassing diagnostic redaction.
+            self._delegate.__exit__(None, None, None)
         # Telemetry must never suppress an exception from the RPC body, even
         # if a third-party context manager incorrectly returns a truthy value.
         return False
@@ -441,6 +619,8 @@ class ACPClientBase(ABC):
         self._streaming: bool = False
         self._activity_queued = False
         self._query_lock = asyncio.Lock()
+        self._permission_turn = _PermissionTurnState()
+        self._permission_request_turns: dict[int | str | None, _PermissionTurnState] = {}
         self._connect_lock = asyncio.Lock()
         self._disconnect_lock = asyncio.Lock()
         self._disconnect_task: asyncio.Task[None] | None = None
@@ -631,6 +811,7 @@ class ACPClientBase(ABC):
                 cwd=self.config.cwd or None,
                 env=env,
                 limit=10 * 1024 * 1024,  # 10 MB; the default 64 KB is too small for large JSON-RPC lines.
+                **_process_group_kwargs(),
             )
         )
         self._async_spawn_task = task
@@ -693,6 +874,7 @@ class ACPClientBase(ABC):
         self.agent_info = None
         self.auth_methods = []
         self._clear_session_state()
+        self._begin_permission_turn()
         self._session_transition_id = None
         self._session_transition_active = False
         self._pool_reusable = True
@@ -705,6 +887,10 @@ class ACPClientBase(ABC):
         self.session_info = {}
         self.session_usage = None
         self.available_commands = []
+
+    def _begin_permission_turn(self) -> None:
+        # Queued requests retain the old object's cancellation state.
+        self._permission_turn = _PermissionTurnState()
 
     def _snapshot_session_state(self) -> _SessionStateSnapshot:
         return _SessionStateSnapshot(
@@ -851,16 +1037,18 @@ class ACPClientBase(ABC):
 
         option = next((item for item in self.session_config_options if item.get("id") == config_id), None)
         if option is None:
-            raise ACPUnsupportedCapabilityError(f"session config option {config_id}")
+            raise ACPUnsupportedCapabilityError(
+                f"session config option {config_id}", public_capability="missing session config option"
+            )
         option_type = option.get("type")
         if option_type == "boolean" and not isinstance(value, bool):
-            raise TypeError(f"config option {config_id!r} requires a boolean value")
+            raise TypeError("config option requires a boolean value")
         if option_type == "select":
             if not isinstance(value, str):
-                raise TypeError(f"config option {config_id!r} requires a string value")
+                raise TypeError("config option requires a string value")
             choices = self._select_option_values(option.get("options"), config_id=config_id)
             if value not in choices:
-                raise ValueError(f"invalid value {value!r} for config option {config_id!r}")
+                raise ValueError("invalid value for session config option")
 
         params: dict[str, Any] = {
             "sessionId": self.session_id,
@@ -884,7 +1072,7 @@ class ACPClientBase(ABC):
             raise ACPUnsupportedCapabilityError("session modes")
         available = state.get("availableModes", [])
         if mode_id not in {mode.get("id") for mode in available if isinstance(mode, dict)}:
-            raise ValueError(f"mode {mode_id!r} was not advertised for this session")
+            raise ValueError("mode was not advertised for this session")
 
         result = await self._rpc(
             "session/set_mode",
@@ -909,6 +1097,7 @@ class ACPClientBase(ABC):
         session_id = self.session_id
         if not session_id:
             raise RuntimeError("No active ACP session")
+        self._begin_permission_turn()
         self._chunks = []
         self._chunk_chars = 0
         self._complete = asyncio.Event()
@@ -933,10 +1122,13 @@ class ACPClientBase(ABC):
                 self._complete.set()
             except asyncio.TimeoutError as exc:
                 await self._cleanup_after_prompt_failure("prompt RPC timeout")
-                raise ACPPromptTimeoutError(
-                    self.config.timeout_prompt,
-                    partial_output="".join(self._chunks),
-                ) from exc
+                _raise_private_cause(
+                    ACPPromptTimeoutError(
+                        self.config.timeout_prompt,
+                        partial_output="".join(self._chunks),
+                    ),
+                    exc,
+                )
             except ACPProtocolError as exc:
                 await self._cleanup_after_prompt_failure("invalid prompt response")
                 raise self._with_partial_output(exc) from None
@@ -945,7 +1137,7 @@ class ACPClientBase(ABC):
                 wrapped = self._with_partial_output(exc)
                 if wrapped is exc:
                     raise
-                raise wrapped from exc
+                raise wrapped from wrapped.__cause__
             except Exception as exc:
                 logger.warning(
                     "ACP query error: chunks=%d err=%s",
@@ -955,7 +1147,7 @@ class ACPClientBase(ABC):
                 wrapped = self._with_partial_output(exc)
                 if wrapped is exc:
                     raise
-                raise wrapped from exc
+                raise wrapped from wrapped.__cause__
 
             remaining = deadline - loop.time()
             if remaining <= 0:
@@ -1012,6 +1204,7 @@ class ACPClientBase(ABC):
         session_id = self.session_id
         if not session_id:
             raise RuntimeError("No active ACP session")
+        self._begin_permission_turn()
         self._chunks = []
         self._chunk_chars = 0
         complete = asyncio.Event()
@@ -1048,7 +1241,7 @@ class ACPClientBase(ABC):
                     self.config.timeout_prompt,
                     partial_output="".join(self._chunks),
                 )
-                self._stream_error.__cause__ = exc
+                _bind_private_cause(self._stream_error, exc)
                 if self._stream_queue:
                     self._stream_queue.put_nowait(None)
             except Exception as exc:
@@ -1189,7 +1382,9 @@ class ACPClientBase(ABC):
             raise ACPProtocolError("initialize response result must be an object")
         version = result.get("protocolVersion")
         if isinstance(version, bool) or version != ACP_PROTOCOL_VERSION:
-            raise ACPProtocolError(f"ACP protocol version mismatch: expected {ACP_PROTOCOL_VERSION}, got {version!r}")
+            raise ACPProtocolError(
+                f"ACP protocol version mismatch: expected {ACP_PROTOCOL_VERSION}", details={"protocolVersion": version}
+            )
         cls._validate_meta(result, source="initialize response")
         return result
 
@@ -1302,38 +1497,51 @@ class ACPClientBase(ABC):
             if not isinstance(config_id, str) or not config_id:
                 raise ACPProtocolError(f"{source} config option requires a non-empty id")
             if config_id in config_ids:
-                raise ACPProtocolError(f"{source} configOptions contains duplicate id {config_id!r}")
+                raise ACPProtocolError(
+                    f"{source} configOptions contains duplicate id", details={"config_id": config_id}
+                )
             config_ids.add(config_id)
             name = item.get("name")
             if not isinstance(name, str) or not name:
-                raise ACPProtocolError(f"{source} config option {config_id!r} requires a non-empty name")
+                raise ACPProtocolError(
+                    f"{source} config option requires a non-empty name", details={"config_id": config_id}
+                )
             description = item.get("description")
             if description is not None and not isinstance(description, str):
-                raise ACPProtocolError(f"{source} config option {config_id!r} description must be a string or null")
+                raise ACPProtocolError(
+                    f"{source} config option description must be a string or null", details={"config_id": config_id}
+                )
             category = item.get("category")
             if category is not None and not isinstance(category, str):
-                raise ACPProtocolError(f"{source} config option {config_id!r} category must be a string or null")
-            ACPClientBase._validate_meta(item, source=f"{source} config option {config_id!r}")
+                raise ACPProtocolError(
+                    f"{source} config option category must be a string or null", details={"config_id": config_id}
+                )
+            ACPClientBase._validate_meta(item, source=f"{source} config option", details={"config_id": config_id})
 
             option_type = item.get("type")
             current_value = item.get("currentValue")
             if option_type == "boolean":
                 if not isinstance(current_value, bool):
                     raise ACPProtocolError(
-                        f"{source} boolean config option {config_id!r} requires a boolean currentValue"
+                        f"{source} boolean config option requires a boolean currentValue",
+                        details={"config_id": config_id},
                     )
             elif option_type == "select":
                 if not isinstance(current_value, str) or not current_value:
                     raise ACPProtocolError(
-                        f"{source} select config option {config_id!r} requires a non-empty currentValue"
+                        f"{source} select config option requires a non-empty currentValue",
+                        details={"config_id": config_id},
                     )
                 choices = ACPClientBase._select_option_values(item.get("options"), config_id=config_id)
                 if current_value not in choices:
                     raise ACPProtocolError(
-                        f"{source} config option {config_id!r} currentValue was not advertised in options"
+                        f"{source} config option currentValue was not advertised in options",
+                        details={"config_id": config_id},
                     )
             else:
-                raise ACPProtocolError(f"{source} config option {config_id!r} requires type 'select' or 'boolean'")
+                raise ACPProtocolError(
+                    f"{source} config option requires type 'select' or 'boolean'", details={"config_id": config_id}
+                )
             options.append(copy.deepcopy(item))
         return options
 
@@ -1341,51 +1549,78 @@ class ACPClientBase(ABC):
     def _select_option_values(value: Any, *, config_id: str) -> set[str]:
         """Return values from either ACP flat or grouped select options."""
         if not isinstance(value, list):
-            raise ACPProtocolError(f"config option {config_id!r} options must be an array")
+            raise ACPProtocolError("config option options must be an array", details={"config_id": config_id})
         shape: str | None = None
         values: set[str] = set()
         group_ids: set[str] = set()
         for item in value:
             if not isinstance(item, dict):
-                raise ACPProtocolError(f"config option {config_id!r} options must contain objects")
+                raise ACPProtocolError("config option options must contain objects", details={"config_id": config_id})
             if "value" in item:
                 if shape == "grouped":
-                    raise ACPProtocolError(f"config option {config_id!r} cannot mix flat and grouped options")
+                    raise ACPProtocolError(
+                        "config option cannot mix flat and grouped options", details={"config_id": config_id}
+                    )
                 shape = "flat"
                 candidates = [item]
             else:
                 if shape == "flat":
-                    raise ACPProtocolError(f"config option {config_id!r} cannot mix flat and grouped options")
+                    raise ACPProtocolError(
+                        "config option cannot mix flat and grouped options", details={"config_id": config_id}
+                    )
                 shape = "grouped"
                 group_id = item.get("group")
                 group_name = item.get("name")
                 candidates = item.get("options")
                 if not isinstance(group_id, str) or not group_id or not isinstance(group_name, str) or not group_name:
-                    raise ACPProtocolError(f"config option {config_id!r} group requires non-empty group and name")
+                    raise ACPProtocolError(
+                        "config option group requires non-empty group and name", details={"config_id": config_id}
+                    )
                 if group_id in group_ids:
-                    raise ACPProtocolError(f"config option {config_id!r} contains duplicate group {group_id!r}")
+                    raise ACPProtocolError(
+                        "config option contains duplicate group", details={"config_id": config_id, "group_id": group_id}
+                    )
                 group_ids.add(group_id)
-                ACPClientBase._validate_meta(item, source=f"config option {config_id!r} group {group_id!r}")
+                ACPClientBase._validate_meta(
+                    item, source="config option group", details={"config_id": config_id, "group_id": group_id}
+                )
                 if not isinstance(candidates, list):
-                    raise ACPProtocolError(f"config option {config_id!r} group options must be an array")
+                    raise ACPProtocolError(
+                        "config option group options must be an array",
+                        details={"config_id": config_id, "group_id": group_id},
+                    )
             for candidate in candidates:
                 if not isinstance(candidate, dict):
-                    raise ACPProtocolError(f"config option {config_id!r} options must contain objects")
+                    raise ACPProtocolError(
+                        "config option options must contain objects", details={"config_id": config_id}
+                    )
                 option_value = candidate.get("value")
                 option_name = candidate.get("name")
                 if not isinstance(option_value, str) or not option_value:
-                    raise ACPProtocolError(f"config option {config_id!r} value requires a non-empty string")
+                    raise ACPProtocolError(
+                        "config option value requires a non-empty string", details={"config_id": config_id}
+                    )
                 if not isinstance(option_name, str) or not option_name:
-                    raise ACPProtocolError(f"config option {config_id!r} value requires a non-empty name")
+                    raise ACPProtocolError(
+                        "config option value requires a non-empty name",
+                        details={"config_id": config_id, "value": option_value},
+                    )
                 option_description = candidate.get("description")
                 if option_description is not None and not isinstance(option_description, str):
-                    raise ACPProtocolError(f"config option {config_id!r} value description must be a string or null")
+                    raise ACPProtocolError(
+                        "config option value description must be a string or null",
+                        details={"config_id": config_id, "value": option_value},
+                    )
                 ACPClientBase._validate_meta(
                     candidate,
-                    source=f"config option {config_id!r} value {option_value!r}",
+                    source="config option value",
+                    details={"config_id": config_id, "value": option_value},
                 )
                 if option_value in values:
-                    raise ACPProtocolError(f"config option {config_id!r} contains duplicate value {option_value!r}")
+                    raise ACPProtocolError(
+                        "config option contains duplicate value",
+                        details={"config_id": config_id, "value": option_value},
+                    )
                 values.add(option_value)
         return values
 
@@ -1413,19 +1648,19 @@ class ACPClientBase(ABC):
             description = mode.get("description")
             if description is not None and not isinstance(description, str):
                 raise ACPProtocolError(f"{source} availableModes descriptions must be strings or null")
-            ACPClientBase._validate_meta(mode, source=f"{source} available mode {mode_id!r}")
+            ACPClientBase._validate_meta(mode, source=f"{source} available mode", details={"mode_id": mode_id})
             if mode_id in mode_ids:
-                raise ACPProtocolError(f"{source} availableModes contains duplicate id {mode_id!r}")
+                raise ACPProtocolError(f"{source} availableModes contains duplicate id", details={"mode_id": mode_id})
             mode_ids.add(mode_id)
         if current not in mode_ids:
             raise ACPProtocolError(f"{source} currentModeId was not advertised in availableModes")
         return copy.deepcopy(value)
 
     @staticmethod
-    def _validate_meta(value: dict[str, Any], *, source: str) -> dict[str, Any] | None:
+    def _validate_meta(value: dict[str, Any], *, source: str, details: Any = None) -> dict[str, Any] | None:
         meta = value.get("_meta")
         if meta is not None and not isinstance(meta, dict):
-            raise ACPProtocolError(f"{source} _meta must be an object or null")
+            raise ACPProtocolError(f"{source} _meta must be an object or null", details=details)
         return copy.deepcopy(meta)
 
     def _capture_session_info_update(self, update: dict[str, Any]) -> None:
@@ -1522,7 +1757,7 @@ class ACPClientBase(ABC):
             try:
                 _require_valid_unicode(cwd, "session/list cwd")
             except ValueError as exc:
-                raise ACPProtocolError(str(exc)) from exc
+                _raise_private_cause(ACPProtocolError(str(exc)), exc)
             if "additionalDirectories" in item:
                 directories = item["additionalDirectories"]
                 if not isinstance(directories, list) or any(
@@ -1533,7 +1768,7 @@ class ACPClientBase(ABC):
                     for path in directories:
                         _require_valid_unicode(path, "session/list additional directory")
                 except ValueError as exc:
-                    raise ACPProtocolError(str(exc)) from exc
+                    _raise_private_cause(ACPProtocolError(str(exc)), exc)
             for optional_string in ("title", "updatedAt"):
                 value = item.get(optional_string)
                 if value is not None and not isinstance(value, str):
@@ -1621,7 +1856,7 @@ class ACPClientBase(ABC):
                 try:
                     _require_valid_unicode(session_id, "session/new sessionId")
                 except ValueError as exc:
-                    raise ACPProtocolError(str(exc)) from exc
+                    _raise_private_cause(ACPProtocolError(str(exc)), exc)
                 new_session_id = session_id
         self._capture_session_config(method, result)
         if method in {"session/new", "session/load", "session/resume"}:
@@ -1681,6 +1916,7 @@ class ACPClientBase(ABC):
         """
         if not self.session_id or not self._connected:
             return
+        self._permission_turn.cancelled = True
         try:
             await wait_for_owned(
                 self._send_notification(
@@ -1714,6 +1950,13 @@ class ACPClientBase(ABC):
             await self._disconnect_locked()
 
     async def _disconnect_locked(self) -> None:
+        # Record the CLI's tools before it is told to stop: the CLI exits on
+        # stdin EOF (and may on session/cancel), and a dead parent leaves no
+        # tree to walk. The recorded pids are terminated further down.
+        early_proc = self.process
+        descendants = (
+            _snapshot_descendants(early_proc.pid) if isinstance(early_proc, asyncio.subprocess.Process) else set()
+        )
         if self._connected and self.session_id:
             with suppress(Exception):
                 await asyncio.wait_for(self.cancel(), timeout=2.0)
@@ -1782,6 +2025,11 @@ class ACPClientBase(ABC):
                 )
 
         termination_error: BaseException | None = None
+        # The CLI's tools (shell -> long command) would outlive it as orphans;
+        # terminate the ones recorded at the start of this disconnect.
+        tree_outcome = await _terminate_process_tree(proc, descendants)
+        if tree_outcome is not None:
+            logger.debug("ACP process tree termination: %s", tree_outcome)
         if proc.returncode is None:
             try:
                 proc.terminate()
@@ -2269,7 +2517,7 @@ class ACPClientBase(ABC):
                 if request_write_started:
                     await self._invalidate_uncertain_rpc_transport(method)
                 if prompt_write_started:
-                    raise ACPRequestOutcomeUnknownError(exc) from exc
+                    _raise_private_cause(ACPRequestOutcomeUnknownError(exc), exc)
                 raise
             finally:
                 self._finish_rpc_lifecycle(transition_id, previous_session_state, transition_succeeded)
@@ -2383,7 +2631,7 @@ class ACPClientBase(ABC):
                 try:
                     text = line.decode("utf-8").strip()
                 except UnicodeDecodeError as exc:
-                    raise ACPProtocolError("ACP stdout frame is not valid UTF-8") from exc
+                    _raise_private_cause(ACPProtocolError("ACP stdout frame is not valid UTF-8"), exc)
                 if not text:
                     continue
 
@@ -2497,7 +2745,7 @@ class ACPClientBase(ABC):
                     return ACPClientBase._validate_json_frame(parsed)
         except (json.JSONDecodeError, ValueError, RecursionError) as e:
             if looks_like_frame:
-                raise ACPProtocolError("Malformed JSON-RPC frame") from e
+                _raise_private_cause(ACPProtocolError("Malformed JSON-RPC frame"), e)
             if sensitive_logging_enabled():
                 logger.debug("Failed to parse JSON from line: %r", text[:80])
             else:
@@ -2511,7 +2759,7 @@ class ACPClientBase(ABC):
         try:
             _validate_json_values(parsed, "JSON-RPC")
         except ValueError as exc:
-            raise ACPProtocolError(str(exc)) from exc
+            _raise_private_cause(ACPProtocolError(str(exc)), exc)
         return parsed
 
     async def _dispatch(self, msg: dict) -> None:
@@ -2589,6 +2837,8 @@ class ACPClientBase(ABC):
             if len(self._request_tasks) >= MAX_HOST_REQUEST_TASKS:
                 await self._send_error(request_id, -32000, "Too many concurrent ACP host requests")
                 return
+            if method == "session/request_permission":
+                self._permission_request_turns[request_id] = self._permission_turn
             task = asyncio.create_task(self._run_request(msg))
             self._request_tasks.add(task)
             self._request_tasks_by_id[request_id] = task
@@ -2690,6 +2940,7 @@ class ACPClientBase(ABC):
         self._request_tasks.discard(task)
         if self._request_tasks_by_id.get(request_id) is task:
             self._request_tasks_by_id.pop(request_id, None)
+            self._permission_request_turns.pop(request_id, None)
         self._request_reply_started.discard(request_id)
         self._terminal_wait_request_ids.discard(request_id)
         if not task.cancelled():
@@ -2913,6 +3164,13 @@ class ACPClientBase(ABC):
                 return
 
             legacy_id_only = all(isinstance(option, dict) and "kind" not in option for option in options)
+            option_ids: set[str] = set()
+            for option in options:
+                option_id = option.get("optionId") if isinstance(option, dict) else None
+                if not isinstance(option_id, str) or not option_id or option_id in option_ids:
+                    await self._send_host_error(mid, -32602, "Permission option IDs must be non-empty and unique")
+                    return
+                option_ids.add(option_id)
             if not legacy_id_only:
                 try:
                     validate_permission_tool_call(params.get("toolCall"))
@@ -2929,6 +3187,11 @@ class ACPClientBase(ABC):
                 except ACPProtocolError:
                     await self._send_host_error(mid, -32602, "Invalid permission request parameters")
                     return
+
+            turn = self._permission_request_turns.get(mid, self._permission_turn)
+            if turn.cancelled:
+                await self._send_host_result(mid, {"outcome": {"outcome": "cancelled"}})
+                return
 
             preferred_kinds = (
                 ("allow_once", "allow_always")

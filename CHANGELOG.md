@@ -9,6 +9,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 No changes yet.
 
+## [0.2.1] - 2026-09-10
+
+These notes describe the 0.2.1 source scope. Distribution identity and actual
+publication status must be established from the release receipts, not this date.
+Older entries below preserve their historical APIs, defaults and test results;
+they are not current installation or replay-safety instructions. Use the current
+README and CONTRIBUTING for supported commands and verification scope.
+
+### Fixed
+- Use safe default display chains for wrapped response failures and earlier
+  fallback errors. Retain original diagnostic objects in `cause` and
+  `primary_cause`; `__cause__` is no longer their identity-bearing interface.
+  Preserve exact partial text, cancellation and non-retryable unknown outcomes.
+- Keep original RPC exceptions out of SDK-generated telemetry events and status
+  descriptions while preserving bounded failure status and business exceptions.
+  Exercise real SDK export in the development profile, not only tracer doubles.
+- Redact FileCache filesystem-error strings and public filenames while retaining
+  OSError categories, errno, dirty state, durable flush behavior and the original
+  diagnostic error through an explicit private `cause` field.
+- Omit supplied session-control IDs and values from public rejection messages;
+  suppress raw URL parser chains and redact strict JSON duplicate-key errors
+  while retaining rejection policy and structured capability fields.
+- Preserve per-turn cancellation on queued permission requests and reject
+  duplicate permission option IDs without changing valid approval policy.
+- Redact malformed configuration values and environment parse chains; reject
+  cyclic MCP objects without rejecting legal shared JSON substructures.
+- Scan directories lazily within the existing limits. Build only into a new
+  output directory without implicitly cleaning old release artifacts.
+- Include the isolated-hook requirements and repository tools in source
+  distributions, and validate required archive inputs in CI.
+- Protect documented local hook environments, demo session caches and local
+  credential filenames from accidental Git inclusion. Public fixtures remain visible.
+- Keep malformed protocol values in explicit diagnostic details instead of
+  public exceptions; omit raw Claude model values from default logs and escape
+  line breaks in sensitive opt-in output. Validation and model selection are unchanged.
+- Bind `make hooks` to an explicit Python >=3.11 environment without falling
+  back to an ambient global pre-commit command.
+- Require the security-fixed OpenTelemetry API >=1.45.1 when telemetry is
+  requested. Keep the stdlib-only core and Python 3.10 runtime/test support.
+- Isolate repository hooks in a Python >=3.11 tool environment with
+  filelock >=4.2.1. Audit both minimum dependency profiles; no advisories or
+  repository checks are waived to retain the older runtime interpreter.
+- Refresh security-affected locked development dependencies, including the
+  Linux-only cryptography branch, and audit the frozen lock on Linux in CI.
+- Type the Windows-only ctypes loader explicitly inside the existing Windows
+  helpers so POSIX type checking can validate the shared module. Runtime
+  attribute lookup is unchanged; missing attributes still raise and termination
+  authority is unchanged.
+- Attempt to terminate the CLI's tools, not only the CLI, on native ACP disconnect. On
+  Windows the CLI's descendant processes are recorded with a Toolhelp32
+  snapshot at the start of the disconnect and terminated individually (a pid is
+  only terminated while its parent is still the CLI or another recorded pid);
+  on POSIX the CLI is spawned in its own session and its process group receives
+  `SIGTERM`. This reduces orphaned tools after transport retirement, but is
+  best-effort cleanup, not proof that detached, late-spawned, or inaccessible
+  descendants exited. A cancel notification alone is not whole-tree termination.
+- Pin explicit Claude models through `ANTHROPIC_MODEL` before launching
+  `claude-agent-acp`, revalidate model selection after session resume, and
+  recognize advertised picker aliases such as `opus[1m]` without confusing
+  context-window hints with model generations. This reduces unintended profile
+  overrides on new or resumed sessions. Explicit `extra_env` still takes
+  precedence; absent, ambiguous, or RPC-rejected picker options remain best
+  effort and do not introduce a strict model-lock guarantee.
+
+### Documentation
+- Align both README languages, the contribution guides, security/governance
+  boundaries and maintainer checklists with existing strict-warning, coverage,
+  hook, audit and guarded-build checks. Distinguish local and remote CI,
+  installed packages and provider qualification; retain historical entries.
+- Document exported response-error handling, raw diagnostic ownership and
+  original-content partial output. Clarify that sequential provider examples
+  do not implement nested-agent dispatch or guarantee process continuity.
+- Distinguish source, installed, and distributed versions; document clean output
+  directories, exact release files, checksums, and isolated installation checks.
+- Clarify logical-session continuity, provider-dependent effort settings,
+  permission selection versus human business authorization, and private
+  diagnostic handling. Correct outdated API descriptions without changing
+  execution logic, defaults, permission policy, or historical release entries.
+
+### Tests
+- Correct the exited-parent Windows process-tree fixture to launch the real
+  interpreter instead of a virtual-environment redirector, and assert that its
+  reported PID matches the owned subprocess. Preserve all termination assertions.
+- Add synthetic positive/negative coverage for descendant graph ownership,
+  missing intermediates, changed parents, snapshot/access failures, and handle
+  closure. Missing ownership evidence still does not authorize termination.
+
 ## [0.2.0] - 2026-07-19
 
 ### Security

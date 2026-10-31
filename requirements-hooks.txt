@@ -1,0 +1,4 @@
+# Minimum repository-hook stack. Install only in a separate Python >=3.11 environment.
+# filelock's security-fixed release does not support Python 3.10.
+pre-commit==4.6.0
+filelock==4.2.1

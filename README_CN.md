@@ -17,6 +17,8 @@
 - [使用示例](#使用示例)
 - [Session 管理](#session-管理)
 - [配置](#配置)
+- [隐私边界](#隐私边界)
+- [错误处理](#错误处理)
 - [架构](#架构)
 - [测试](#测试)
 - [项目文档](#项目文档)
@@ -44,15 +46,19 @@
 SoulACP 需要 Python 3.10 或更高版本，并且至少安装一个受支持的 agent CLI
 或 ACP bridge，并在需要时完成认证。
 
-### PyPI 已发布版本
+### 包索引版本
 
 ```bash
-python -m pip install soulacp
+pip install soulacp
 ```
+
+GitHub 与 PyPI 使用相同版本号同步发布。
+如需明确选择 Python 解释器，可使用 `python -m pip install soulacp`。
 
 ### 当前源码
 
-源码版本可能包含 README 已记录但尚未发布到 PyPI 的 API。
+也可以克隆 GitHub 仓库并在本地从源码安装。
+如需安装某个发布版本，应先检出对应的发布标签。
 
 ```bash
 git clone https://github.com/AIXP-Labs/SoulACP.git
@@ -62,6 +68,19 @@ python -m pip install -e .
 # 开发与测试工具
 python -m pip install -e ".[dev]"
 ```
+
+仓库 hook 单独安装于 Python >=3.11 环境；运行库和测试仍支持 >=3.10。
+详见[独立仓库 Hook 环境](CONTRIBUTING_CN.md#独立仓库-hook-环境)。
+
+应在同一个 Python 环境核对分发元数据和实际导入模块：
+
+```bash
+python -c "import importlib.metadata as m, soulacp; print(m.version('soulacp')); print(soulacp.__version__)"
+```
+
+验收本 checkout 时两者应为 `0.2.1`。若不一致，可在本机检查
+`soulacp.__file__`，分享诊断前须脱敏个人路径。Editable 安装、wheel 和下游
+锁文件是不同的安装来源；替换磁盘文件不会重载已经运行的 worker。
 
 ### 可选遥测支持
 
@@ -84,11 +103,11 @@ from soulacp import ManagedSession
 async def main():
     async with ManagedSession(provider="claude", model="claude-acp/sonnet") as session:
         # 简单查询 — session 自动管理
-        response = await session.query("你好！", user_id="user1")
+        response = await session.query("Hello!", user_id="user1")
         print(response)
 
         # 流式输出
-        async for chunk in session.stream("用 Python 写个 hello world", user_id="user1"):
+        async for chunk in session.stream("Write hello world", user_id="user1"):
             print(chunk, end="", flush=True)
 
 asyncio.run(main())
@@ -96,7 +115,7 @@ asyncio.run(main())
 
 ManagedSession 自动处理：
 
-- **Session 复用**：相同 user_id 跨请求复用同一 CLI session
+- **Session 复用**：映射仍有效且 provider 支持恢复时，复用用户的逻辑 session
 - **显式重置**：`reset_session(user_id)` 清除经调用方确认的过期/溢出 session，不隐式重放 prompt
 - **重试**：仅对 prompt 发送前的安全瞬态故障指数退避
 - **降级**：仅在确定 prompt 尚未处于执行状态时切换备用 provider
@@ -113,7 +132,7 @@ async def main():
 
     async with ACPConnectionPool(config, client_class) as pool:
         async with pool.acquire() as (client, session_id):
-            response = await client.query("你好！")
+            response = await client.query("Hello!")
             print(response)
 
 asyncio.run(main())
@@ -176,8 +195,14 @@ print("Installed:", installed)
 使用以下命令安装当前 Claude 与 Codex ACP bridge：
 
 ```bash
-npm install -g @agentclientprotocol/claude-agent-acp @agentclientprotocol/codex-acp
+npm install -g "@agentclientprotocol/claude-agent-acp@>=0.86.0" "@agentclientprotocol/codex-acp@>=2.1.1"
 ```
+
+版本范围须保留引号，避免 shell 把 `>` 当作重定向。这些范围与 SoulACP 0.2.1
+的安装提示一致，不是精确锁版，也不代表所有后续 bridge/模型组合均已验收。
+Bridge 可能自带 CLI/runtime，因此只升级全局 `claude` 或 `codex` 不能证明
+bridge 实际使用了哪个 runtime。应核对已安装 bridge 的包元数据和其报告的
+`agent_info`，不要复制凭据或整份 session 状态。
 
 优先使用已更名的 Claude bridge；`claude-code-acp` 仅作为旧版兼容回退。
 Codex bridge 已包含运行时，但下文的 `codex login` 命令还要求 Codex CLI
@@ -202,7 +227,7 @@ from soulacp import ManagedSession
 
 async def main():
     async with ManagedSession(provider="claude", model="claude-acp/sonnet") as session:
-        response = await session.query("你好！")
+        response = await session.query("Hello!")
         print(response)
 
 asyncio.run(main())
@@ -216,7 +241,7 @@ from soulacp import ManagedSession
 
 async def main():
     async with ManagedSession(provider="gemini", model="gemini-acp/gemini-3-flash-preview") as session:
-        response = await session.query("你好！")
+        response = await session.query("Hello!")
         print(response)
 
 asyncio.run(main())
@@ -224,8 +249,9 @@ asyncio.run(main())
 
 ### Codex (OpenAI)
 
-Codex 可使用符合条件的 ChatGPT 订阅或 API key。先执行 `codex login`；
-Codex ACP bridge 会使用 `~/.codex/auth.json` 中的凭据。
+Codex ACP 支持符合条件的 ChatGPT 订阅或 API key 认证。本机使用 ChatGPT 认证时，
+先执行一次 `codex login`；Codex bridge 随后使用 `~/.codex/auth.json`，
+不要求设置 `OPENAI_API_KEY`。
 
 ```python
 import asyncio
@@ -234,7 +260,7 @@ from soulacp import ManagedSession
 async def main():
     # 示例模型；可用性取决于账户和 bridge 版本
     async with ManagedSession(provider="codex", model="codex-acp/gpt-5.5") as session:
-        response = await session.query("你好！")
+        response = await session.query("Hello!")
         print(response)
 
 asyncio.run(main())
@@ -244,10 +270,15 @@ asyncio.run(main())
 
 | 变量 | 取值 | 默认 | 作用 |
 |------|------|------|------|
-| `CODEX_REASONING_EFFORT` | `minimal` / `low` / `medium` / `high` / `xhigh` | `medium` | 推理预算 |
+| `CODEX_REASONING_EFFORT` | 取决于 bridge/模型，例如 `high` | 未设置时为 `medium` | 转发推理配置，本库不校验其枚举值 |
 | `CODEX_SANDBOX_MODE` | `read-only` / `workspace-write` / `danger-full-access` | （codex 默认） | 文件系统权限 |
 | `CODEX_APPROVAL_POLICY` | `untrusted` / `on-request` / `never` | （Codex 默认） | 审批提示 |
 | `CODEX_NETWORK_ACCESS` | `true` / `1` / `yes` | 不注入 | 在 `workspace-write` 中启用联网；其他值不覆盖 Codex 配置 |
+
+`ACPConfig.extra_args` 中显式的 `model_reasoning_effort` 优先；否则先读取
+`extra_env`，再读取允许继承的父环境。显式空字符串不会注入覆盖值。可接受档位
+由已安装 bridge 和模型决定。SoulACP 不注入 Claude effort 默认值；需要时通过
+`extra_env` 提供 provider 支持的控制项，示例和诊断中不得包含凭据。
 
 以下配置会禁用审批提示、允许写工作区并启用联网。仅在可信工作区中使用：
 
@@ -283,7 +314,10 @@ $env:OPENAI_API_KEY | codex login --with-api-key
 模型 ID 格式不变，但可用模型取决于账户和当前 Codex ACP bridge；应查询
 [官方模型目录](https://developers.openai.com/api/docs/models)，不要依赖旧别名。
 
-### 多 Agent 协作
+### 多 Provider 调用
+
+本例只是顺序调用两个 provider。SoulACP 本身不派发嵌套代理、不实现业务流程，
+也不为该流程提供人类授权；这些责任仍属于调用方应用。
 
 ```python
 import asyncio
@@ -292,11 +326,11 @@ from soulacp import ManagedSession
 async def main():
     # Claude 生成代码
     async with ManagedSession(provider="claude", model="claude-acp/sonnet") as claude:
-        code = await claude.query("用 Python 写一个排序算法")
+        code = await claude.query("Write a sorting algorithm in Python")
 
     # Gemini 审查代码
     async with ManagedSession(provider="gemini", model="gemini-acp/gemini-3-flash-preview") as gemini:
-        review = await gemini.query(f"审查这段代码:\n{code}")
+        review = await gemini.query(f"Review this code:\n{code}")
         print(review)
 
 asyncio.run(main())
@@ -315,13 +349,13 @@ from soulacp import ManagedSession
 async def main():
     async with ManagedSession(provider="claude", model="claude-acp/sonnet") as session:
         # 第一次请求：创建 CLI session 并保存映射
-        await session.query("记住 42。", user_id="alice")
+        await session.query("Remember 42.", user_id="alice")
 
         # 第二次请求：复用 Alice 的 CLI session
-        await session.query("什么数字？", user_id="alice")
+        await session.query("What number?", user_id="alice")
 
         # 不同用户获得不同的逻辑 session
-        await session.query("你好！", user_id="bob")
+        await session.query("Hello!", user_id="bob")
 
 asyncio.run(main())
 ```
@@ -339,7 +373,7 @@ async def main():
         model="claude-acp/sonnet",
         session_store=store,
     ) as session:
-        await session.query("记住 42。", user_id="alice")
+        await session.query("Remember 42.", user_id="alice")
 
 asyncio.run(main())  # 关闭 session 时会 flush 待写入的文件缓存
 ```
@@ -349,13 +383,17 @@ asyncio.run(main())  # 关闭 session 时会 flush 待写入的文件缓存
 | 事件 | 行为 |
 |------|------|
 | 首次成功请求 | 创建新 CLI session，并在 pool 成功释放后保存映射（TTL 7 天） |
-| 后续请求 | 相同 user_id → 相同 CLI session（复用） |
+| 后续请求 | 映射有效且恢复成功时复用逻辑 session |
 | 同一用户/session 并发请求 | 在同一个 `ManagedSession` 实例内串行执行；不同 session 仍可并发 |
 | Context overflow | 向调用方抛错；仅在决定提交新 turn 后调用 `reset_session(user_id)` |
 | 已确认失效的已存 session | 仅清除该 provider 映射一次，再显式创建新 session |
 | Prompt 前连接/超时错误 | 保留映射，并在配置的 attempt budget 内重试同一 session |
 | Prompt 传输/RPC 错误 | 不重试、不降级，因为外部副作用可能已经发生 |
 | 降级 | 仅在 prompt 执行前切换 provider（如启动失败），并复用备用 provider 自己的映射 |
+
+逻辑 session ID 不保证原 CLI 进程、子代理或内存中的工具在断连后仍存活。
+无法恢复时，managed session 可能清理无效映射并创建新 session；要求执行
+连续性的应用必须明确处理这一区别。
 
 ### 缓存后端
 
@@ -396,11 +434,11 @@ async def main():
     async with ACPConnectionPool(config, client_class) as pool:
         # 显式 session 复用
         async with pool.acquire() as (client, sid):
-            await client.query("记住 42。")
+            await client.query("Remember 42.")
 
         async with pool.acquire(session_id=sid) as (client, sid2):
             assert sid2 == sid
-            response = await client.query("什么数字？")
+            response = await client.query("What number?")
             print(response)
 
         # 强制新传输，但仍受硬连接上限约束
@@ -431,7 +469,14 @@ mode 方法，因此 Agent 声明 category `mode` config option 时应优先使�
 配置模型同样优先使用 Agent 声明的 category `model` select 选项；目标值已是
 当前值时不会发送 RPC，只有 Agent 完全未声明模型选项时才把非标准
 `session/set_model` 作为兼容回退。Agent 主动推送的 `config_option_update` 和 `current_mode_update`
-会同步两类状态。`authenticate()`、`logout()` 与 `close_session()` 暴露当前
+会同步两类状态。对于 Claude，显式模型还会在 ACP 子进程启动前通过
+`ANTHROPIC_MODEL` 提供模型配置，并在 resume 后再次检查模型选择。这是尽力
+配置，不是严格锁模保证：最后应用的 `extra_env` 可以覆盖 `ANTHROPIC_MODEL`；
+模型选项缺失、匹配不明确或 RPC 被拒绝时，可能继续使用 provider 当前选择。
+传输、超时和协议错误仍会向调用方暴露。要求精确模型的调用方须核对 provider
+报告的选择，不能将 `ACPConfig.model` 当成请求实际由该模型处理的确认；
+报告的元数据也不是独立的模型身份认证。`authenticate()`、`logout()` 与
+`close_session()` 暴露当前
 ACP 生命周期方法，Agent 未声明对应能力时会拒绝调用。成功 logout 或关闭
 当前 session 会使该 client 不可再入池，因此 lease release 时会退休 transport。
 session load/resume 在 Agent 未声明 `loadSession` 或
@@ -441,9 +486,9 @@ session load/resume 在 Agent 未声明 `loadSession` 或
 
 模型只移除开头的 `<provider>-acp/` 或 `<provider>/` 命名空间；例如
 `claude-acp/openai/gpt-5` 会保留为 `openai/gpt-5`。当 executable 对兼容用的
-`session/set_model` 明确返回 JSON-RPC `-32601` 时，soulacp 会告警一次，并按
-adapter/executable 缓存该结果；后续 client 使用 provider 默认模型，不再重复发送
-这个不受支持的请求。
+`session/set_model` 明确返回 JSON-RPC `-32601` 时，使用该兼容路径的 adapter
+会告警一次，并按 adapter/executable 缓存结果；后续 client 跳过该请求。
+跳过不受支持的 RPC 不证明请求的模型已经选中。
 
 ## 配置
 
@@ -478,6 +523,9 @@ adapter/executable 缓存该结果；后续 client 使用 provider 默认模型�
 > （优先 `allow_once`）。这不是操作系统沙箱。对不可信工作区应设为 `false`，
 > 并审查 provider CLI 自身的权限模型。
 
+取消回合的排队或迟到权限请求返回`cancelled`，重复选项ID在选择前拒绝。
+这不改变合法allow/reject策略，也不把ACP权限选择变成人类业务授权门。
+
 `pool_size` 不是并发上限。物理容量由每个 pool 实例自己的
 `pool_max_connections` 约束。每个 `ManagedSession` 实例按 `provider:model` key
 各建一个 pool，因此单个实例使用 N 个 key 时最多可保留 N 倍的单池上限；
@@ -489,10 +537,14 @@ session-affinity cache 的作用。同一个指定 session ID 同一时刻只允
 还会获得独立快照。因此，调用方或 client 后续修改配置都不能改变 pool 已校验的容量与
 生命周期策略；需要改变策略时应创建新的 pool。
 
-布尔环境变量只接受 `true/false`、`1/0`、`yes/no` 或 `on/off`；非法值会
+由 `ACPConfig.from_env()` 解析的布尔配置变量接受 `true/false`、`1/0`、
+`yes/no` 或 `on/off`；非法值会
 抛出 `ValueError`，不会静默当成 False。OpenClaw 默认不传 `--session`，
 每个 ACP bridge 因此使用隔离 session key；设置 `OPENCLAW_SESSION_KEY`
 表示调用方明确选择 OpenClaw 的共享/挂接 session 路由。
+配置错误只报告字段和约束，不回显原始输入；非法数值环境变量会抑制原始解析异常链。
+会话控制拒绝消息省略用户提供的ID和值；URL解析异常链及严格JSON重复键错误不暴露输入文本。
+包括`capability`在内的原始结构化异常字段仍须按敏感信息处理。
 
 ### Provider 专用环境变量
 
@@ -576,7 +628,7 @@ async def main():
         model=config.model,
         config=config,
     ) as session:
-        print(await session.query("你好！"))
+        print(await session.query("Hello!"))
 
 asyncio.run(main())
 ```
@@ -596,6 +648,13 @@ deadline。
 `$/cancel_request` notification。收到 Agent 的 `$/cancel_request` 后，只会在
 匹配的 host request 尚未开始回复时取消，并返回 JSON-RPC `-32800`；prompt
 超时仍会退休 transport，防止迟到响应进入后续 lease。
+
+原生 ACP disconnect 还会尽力清理后代进程：POSIX 使用 CLI 的独立进程组，
+Windows 使用后代 PID 快照及父链检查。脱离进程组的进程、快照竞态和权限失败
+不属于整棵进程树必定清理成功的保证。取消通知或清理日志不是所有后代已退出的
+证明；空的Windows快照，尤其在CLI已退出之后，也不能证明已没有工具进程存活。
+需要该保证时应使用OS job/container隔离。这没有把TerminalService或旧版Cursor
+扩展成整棵进程树终止API。
 
 原生 client 的 connect/disconnect 操作会串行执行。每个 client 的 prompt/stream 与
 session load/resume 也会串行执行，避免旧 prompt 完成时覆盖刚恢复的新 session。
@@ -617,13 +676,13 @@ terminate/kill 失败时绝不会释放 pool 的物理容量：client 或 termin
 空闲健康检查只检查本地进程与 pipe 状态，不会向按行分隔的 JSON-RPC 传输注入探针字节。
 
 ACP v1 初始化必须协商到协议版本 `1`，每个广告的认证方法都必须包含 agent
-给出的非空 `id`；soulacp 不会臆造认证 ID。ACP stdout 与旧版 Cursor JSON
-stdout 均采用严格 UTF-8 解码。已知的 capability 字段和所有稳定 v1 RPC response
+给出的非空 `id`；soulacp 不会臆造认证 ID。已知的 capability 字段和所有稳定 v1 RPC response
 都会在提交本地 session、mode 或 config 状态前完成校验；response 及已知嵌套结构中的
 `_meta` 只能是 object 或 null。受支持的 host request 遵循同一 metadata 契约，非法
 metadata 返回 `-32602`。ACP v1 permission request 必须包含合法 `toolCall`，每个
 option 也必须有非空 ID、名称和标准 kind，soulacp 才会选择；只有当全部 option 均省略
-`kind` 时，才保留显式的旧版 ID-only 兼容路径。服务端 request ID 接受协议规定的 null、int64 和 string，
+`kind` 时，才保留显式的旧版 ID-only 兼容路径。ACP stdout与旧版Cursor JSON stdout
+均采用严格UTF-8解码。服务端 request ID 接受协议规定的 null、int64 和 string，
 response 只与 soulacp 发出的 int64 整数 ID 关联。所有外部 JSON 输入还会
 拒绝重复 object key，避免字段在解码时被静默覆盖；入站和出站 JSON 都会拒绝非法 Unicode
 及非有限数值，不输出实现私有 JSON；OpenCode 继承的
@@ -667,13 +726,31 @@ soulacp 只使用 OpenTelemetry API。应用负责配置 SDK、reader、exporter
 在进程内共享；metric 和 RPC span 均不写入 session ID、prompt、错误文本、
 user ID、路径或 PID。遥测后端故障会被隔离，不能替换业务结果或异常。
 
+RPC span清理不接收原始异常和堆栈；失败仅保留有界错误/取消分类与错误状态，
+不写异常事件或状态原文。开发测试安装SDK以检查真实内存导出，运行库仍只使用可选API。
+
 ### 隐私边界
 
 SoulACP 默认会在日志与公开异常字符串中脱敏 provider message、RPC data、session ID、
-stderr、user ID 和 cache path。`RPCError` 与 `ACPProviderError` 仍保留原始结构化字段
+stderr、user ID 和 cache path。`RPCError`、`ACPProviderError`与`ACPProtocolError`仍保留原始结构化字段
 供程序诊断；只有显式调用 `format_diagnostic(include_sensitive=True)` 才会渲染原文。
 设置 `ACP_LOG_SENSITIVE_DATA=1` 还会允许库日志输出原始 provider 诊断，只应在短时、
 访问受控的调试中使用。
+协议错误公开安全原因，将provider原值保存在`details`中。
+文件缓存持久化错误保留OSError类别与errno，公开filename脱敏；`cause`保留原始I/O错误，
+仅供受保护的显式诊断，不应直接打印。
+响应包装异常以`cause`保留原始异常；fallback还以`primary_cause`保留先前primary异常。
+默认`__cause__`显示链改为安全摘要，不再是原对象；需要诊断身份时必须使用上述显式原始字段。
+完整Python堆栈仍可能包含源文件位置及调用方追加的notes，必须先在私下复核。
+部分输出是原始响应内容，不是已脱敏诊断字段，须按私人应用数据保护。
+Claude模型选择值默认不写日志；敏感日志显式启用时对其转义，换行不会另起日志行。
+
+分享 issue、trace 或测试报告前，必须移除凭据、认证 header、cookie、prompt/response、
+session ID、个人路径和身份信息。不要附上 `.env`、provider 认证文件、session
+缓存、原始配置/状态对象或 `format_diagnostic(include_sensitive=True)` 的输出。
+应使用合成复现数据和经审阅的最小必要诊断。默认脱敏不保证第三方 CLI 日志或
+调用方直接打印原始字段也安全。`ACP_AUTO_APPROVE` 只控制 ACP 权限选项，
+不代表人类已经批准应用中的业务决策。
 
 `ProviderSessionStore` 默认仅使用内存。显式配置 `FileCache` 后，provider session ID
 会以未加密形式落盘，user key 使用确定性的伪匿名 hash；必须依靠操作系统权限保护，
@@ -685,6 +762,19 @@ stderr、user ID 和 cache path。`RPCError` 与 `ACPProviderError` 仍保留原
 命令行元数据。对进程列表隐私要求较高时应优先使用原生 Cursor ACP adapter。
 SoulACP agent 子进程以当前 OS 账户运行，并默认继承父进程环境；最小环境模式不会改变
 该 OS 信任边界。本库不是凭据沙箱。
+
+### 错误处理
+
+下列异常均可从`soulacp`公开导入；捕获异常本身不能证明外部副作用是否发生：
+
+| 异常 | 调用方责任 |
+|------|------------|
+| `ACPRequestOutcomeUnknownError` | 执行可能已开始，不自动重放；先核实外部副作用。 |
+| `ACPPartialResponseError` | `partial_output`是未完成的原始内容，不是成功答案或可公开诊断。 |
+| `ACPProtocolError` | 将不合法的完成响应视为失败，原始`details`保持私有。 |
+| `ACPPromptTimeoutError` / `ACPStreamTimeoutError` | 传输会退休，不自动重试或切换provider。 |
+| `RPCError` | `is_retryable`只分类控制面错误，不授权重放结果未知的prompt。 |
+| `ACPResumeError` | 明确处理会话无法恢复的情况；新的逻辑会话不证明原child连续性。 |
 
 ## 架构
 
@@ -704,31 +794,47 @@ ManagedSession（高级 API）
 ## 测试
 
 ```bash
-# 默认测试（跳过 provider CLI 和模型调用）
-python -m pytest tests/ -v
+# 默认测试：严格告警及语句/分支覆盖率
+# 未显式启用时跳过 provider CLI 和模型调用
+python -m pytest tests/ -W error -v --cov=soulacp --cov-branch --cov-report=term
 
 # 集成测试（需要安装并认证对应 CLI）
-python -m pytest --run-integration tests/test_integration.py -v          # Claude Code
-python -m pytest --run-integration tests/test_integration_gemini.py -v   # Gemini
-python -m pytest --run-integration tests/test_integration_codex.py -v    # Codex
+python -m pytest --run-integration tests/test_integration.py -W error -v          # Claude Code
+python -m pytest --run-integration tests/test_integration_gemini.py -W error -v   # Gemini
+python -m pytest --run-integration tests/test_integration_codex.py -W error -v    # Codex
 
 # 单元 + 集成 + stdio 压测
-python -m pytest --run-integration tests/ -v
+python -m pytest --run-integration tests/ -W error -v
 
 # CI 使用的静态检查
-python -m ruff check src/soulacp/ tests/ examples/
-python -m ruff format --check src/soulacp/ tests/ examples/
+python -m ruff check src/soulacp/ tests/ examples/ tools/
+python -m ruff format --check src/soulacp/ tests/ examples/ tools/
 python -m pyright
 # Bash；PowerShell 请先设置 `$env:PYTHONPATH = "src"`。
 PYTHONPATH=src python -m pyright --verifytypes soulacp --ignoreexternal
 python -m bandit -q -r src/soulacp
 
-# 构建 source distribution 和 wheel
-python -m build
+# 在全新空目录构建，不与历史发布混用
+python tools/build_release.py --outdir dist/0.2.1
+python -m twine check dist/0.2.1/soulacp-0.2.1-py3-none-any.whl dist/0.2.1/soulacp-0.2.1.tar.gz
+python tools/check_sdist.py dist/0.2.1/soulacp-0.2.1.tar.gz
 ```
+
+仓库hook使用独立Python >=3.11的[hook环境](CONTRIBUTING_CN.md#独立仓库-hook-环境)。
+`make check`执行lint、类型和安全检查，不运行测试、hook、审计或构建。
+受控构建要求输出路径尚不存在，不会删除旧产物；后续构建须另选新路径。
+
+CI徽标链接到GitHub Actions，不是本checkout或本地部署的验收回执。每次验收须记录
+准确源码/产物身份、平台、实际通过、失败和skip。本地CI复现、远端GitHub CI、
+已安装wheel测试及认证provider测试是分别记账的结果。
 
 `test_integration*`、`test_spike_*` 和 `test_stress_*` 文件需要显式传入
 `--run-integration`；默认测试会有意跳过它们。
+
+源码测试通过 `tests/conftest.py` 优先导入本 checkout 的 `src`，不能单独证明
+已安装 wheel 正确。分发 SHA、冷安装和隐私核查见
+[发布身份清单](CONTRIBUTING_CN.md#发布身份与隐私)。不要覆盖已有输出目录，
+也不要无差别上传 `dist/*`。
 
 ## 项目文档
 
@@ -736,7 +842,7 @@ python -m build
 |------|------|
 | [CHANGELOG.md](CHANGELOG.md) | 发布历史与行为变更 |
 | [SECURITY.md](SECURITY.md) | 安全政策与漏洞报告 |
-| [CONTRIBUTING_CN.md](CONTRIBUTING_CN.md) / [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献流程 |
+| [CONTRIBUTING.md](CONTRIBUTING.md) / [CONTRIBUTING_CN.md](CONTRIBUTING_CN.md) | 贡献流程 |
 | [GOVERNANCE.md](GOVERNANCE.md) | 项目治理与决策 |
 | [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | 社区行为规范 |
 
@@ -748,16 +854,22 @@ AIXP Labs 开发并维护以下核心项目：
 |------|------|------|
 | [HSAW](https://hsaw.dev) | 人类主权与福祉 —— Axiom 0 白皮书（基石） | hsaw.dev |
 | [AIZP](https://aizp.dev) | AI Zenith-Zero Protocol —— 运行时行为对齐 | aizp.dev |
+| [AIIP](https://aiip.dev) | AI Intent Protocol（AI 意图协议）—— 意图树治理、优先级与反馈 | aiip.dev |
+| [AIKP](https://aikp.dev) | AI Knowledge Protocol（AI 知识协议）—— 长期知识组织、导航与治理 | aikp.dev |
+| [AIJP](https://aijp.dev) | AI Job Protocol（AI 作业协议）—— 可调度的工作树与作业图 | aijp.dev |
+| [AINP](https://ainp.dev) | AI Neogenesis Protocol（AI 创生协议）—— 可治理的生成项目：计划 + 内容 + 证据 | ainp.dev |
 | [AILP](https://ailp.dev) | AI List Protocol —— agent 发现与能力广告 | ailp.dev |
 | [AIVP](https://aivp.dev) | AI Value Protocol —— 国际商务、加密资产结算 | aivp.dev |
 | [AIRP](https://airp.dev) | AI RMB Protocol —— 中国大陆商务、人民币持牌结算 | airp.dev |
 | [AIBP](https://aibp.dev) | AI Bot Protocol —— 社交通信与信任 | aibp.dev |
 | [AIAP](https://aiap.dev) | AI Application Protocol —— 治理与合规 | aiap.dev |
-| [AISP](https://aisp.dev) | AI Skill Protocol —— 单文件技能包，机器强制的契约红线 | aisp.dev |
+| [AISP](https://aisp.dev) | AI Skill Protocol —— 目录式技能包，以 AISOP 技能入口和可执行契约绑定为核心 | aisp.dev |
 | [AISOP](https://aisop.dev) | AI Standard Operating Protocol —— 流程程序定义 | aisop.dev |
+| [AIXPStore](https://aixpstore.dev) | AIAP 程序与 AISP 技能官方市场 —— 发现、发布和分发 AI 能力包 | aixpstore.dev |
 | [SoulSkill](https://soulskill.dev) | AISP 技能参考库 & 多 CLI 插件分发 | soulskill.dev |
 | [SoulAgent](https://soulagent.dev) | 任何 CLI / SDK / IDE 直接调用的 drop-in AI agent | soulagent.dev |
 | [SoulBot](https://soulbot.dev) | AI agent 运行时 & 自编排框架（定时、建 agent、agent 间通信） | soulbot.dev |
+| [SoulRun](https://soulrun.dev) | 一个调用的 AISOP 执行引擎 —— 为任何宿主运行 AIAP 程序与 AISP 技能 | soulrun.dev |
 | [SoulACP](https://soulacp.dev) | 适配库 —— 桥接 CLI 工具与 LLM 提供方 **（本项目）** | soulacp.dev |
 
 ---
@@ -774,7 +886,7 @@ AIXP Labs 开发并维护以下核心项目：
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.0. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.1. www.soulacp.dev
 
 <a id="values-philosophy"></a>
 

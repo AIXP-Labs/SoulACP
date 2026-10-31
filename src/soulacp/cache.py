@@ -23,6 +23,23 @@ logger: logging.Logger = logging.getLogger(__name__)
 MAX_CACHE_FILE_BYTES = 10 * 1024 * 1024
 
 
+def _private_io_error(error: OSError) -> OSError:
+    """Keep the filesystem category/errno without displaying cache locations."""
+    safe = copy.copy(error)
+    safe.strerror = "File cache persistence failed"
+    safe.args = (error.errno, safe.strerror)
+    for field in ("filename", "filename2"):
+        if getattr(error, field, None) is not None:
+            setattr(safe, field, "<redacted>")
+    if hasattr(safe, "__notes__"):
+        delattr(safe, "__notes__")
+    safe.__cause__ = None
+    safe.__context__ = None
+    safe.__suppress_context__ = True
+    safe.__dict__["cause"] = error
+    return safe
+
+
 def _validate_cache_key(key: str) -> str:
     if not isinstance(key, str):
         raise TypeError("cache key must be a string")
@@ -255,6 +272,8 @@ class FileCache(CacheBackend):
                 )
             raise asyncio.CancelledError
         if write_error is not None:
+            if isinstance(write_error, OSError):
+                raise _private_io_error(write_error) from None
             raise write_error
 
     async def _schedule_save_locked(self) -> None:

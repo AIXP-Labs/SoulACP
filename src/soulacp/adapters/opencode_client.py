@@ -37,7 +37,7 @@ from soulacp.environment import (
 )
 from soulacp.errors import ACPProtocolError, ACPRequestOutcomeUnknownError, ACPResponseError
 from soulacp.meta import CLIENT_NAME, __version__
-from soulacp.privacy import exception_summary, sensitive_logging_enabled
+from soulacp.privacy import _raise_private_cause, exception_summary, sensitive_logging_enabled
 
 logger: logging.Logger = logging.getLogger(__name__)
 MAX_RPC_FRAME_BYTES = 10 * 1024 * 1024
@@ -411,7 +411,7 @@ class OpenCodeACPClient(ACPClientBase):
                 if request_write_started:
                     await self._invalidate_uncertain_rpc_transport(method)
                 if prompt_write_started:
-                    raise ACPRequestOutcomeUnknownError(exc) from exc
+                    _raise_private_cause(ACPRequestOutcomeUnknownError(exc), exc)
                 raise
             finally:
                 self._finish_rpc_lifecycle(transition_id, previous_session_state, transition_succeeded)
@@ -491,7 +491,7 @@ class OpenCodeACPClient(ACPClientBase):
                 try:
                     text = line.decode("utf-8").strip()
                 except UnicodeDecodeError as exc:
-                    raise ACPProtocolError("OpenCode stdout frame is not valid UTF-8") from exc
+                    _raise_private_cause(ACPProtocolError("OpenCode stdout frame is not valid UTF-8"), exc)
                 if not text:
                     continue
 

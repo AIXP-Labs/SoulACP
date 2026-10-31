@@ -80,8 +80,8 @@ def _validate_remote_mcp_url(value: Any, label: str) -> str:
     try:
         parsed = urlsplit(url)
         port = parsed.port
-    except ValueError as exc:
-        raise ValueError(f"{label} must be a valid HTTP(S) URL") from exc
+    except ValueError:
+        raise ValueError(f"{label} must be a valid HTTP(S) URL") from None
     if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname or (port is not None and port < 1):
         raise ValueError(f"{label} must be an absolute HTTP(S) URL with a host")
     if parsed.username is not None or parsed.password is not None:
@@ -91,9 +91,13 @@ def _validate_remote_mcp_url(value: Any, label: str) -> str:
 
 def _validate_strict_json_value(value: Any, label: str) -> None:
     """Require the in-memory shape to use JSON types without coercion."""
-    pending = [value]
+    pending = [(value, False)]
+    ancestors: set[int] = set()
     while pending:
-        item = pending.pop()
+        item, exiting = pending.pop()
+        if exiting:
+            ancestors.remove(id(item))
+            continue
         if item is None or isinstance(item, (bool, int)):
             continue
         if isinstance(item, float):
@@ -103,15 +107,20 @@ def _validate_strict_json_value(value: Any, label: str) -> None:
         if isinstance(item, str):
             _require_valid_unicode(item, label)
             continue
-        if isinstance(item, list):
-            pending.extend(item)
-            continue
-        if isinstance(item, dict):
+        if isinstance(item, (list, dict)):
+            identity = id(item)
+            if identity in ancestors:
+                raise ValueError(f"{label} must not contain cycles")
+            ancestors.add(identity)
+            pending.append((item, True))
+            if isinstance(item, list):
+                pending.extend((nested, False) for nested in item)
+                continue
             for key, nested in item.items():
                 if not isinstance(key, str):
                     raise ValueError(f"{label} object keys must be strings")
                 _require_valid_unicode(key, label)
-                pending.append(nested)
+                pending.append((nested, False))
             continue
         raise ValueError(f"{label} must contain only JSON values")
 
@@ -487,13 +496,13 @@ class ACPConfig:
     """Automatically approve permission requests from the CLI."""
 
     enable_fallback: bool = False
-    """Enable automatic fallback to another provider on failure."""
+    """Allow configured fallback before prompt execution, not after unknown outcomes."""
 
     max_retries: int = 3
     """Total pre-prompt attempts for transient errors (minimum one)."""
 
     retry_base_delay: float = 1.0
-    """Base delay in seconds for exponential backoff (Doc 25)."""
+    """Base delay in seconds for safe pre-prompt exponential backoff."""
 
     max_turns: int | None = None
     """Optional Claude-specific per-session turn cap.
@@ -520,21 +529,20 @@ class ACPConfig:
     extra_env: dict[str, str] = field(default_factory=dict, repr=False)
     """Extra environment variables passed to the CLI subprocess.
 
-    ACP bridges do not consistently forward provider CLI flags, so
-    environment variables are the reliable cross-adapter control surface.
+    Use only variables supported by the installed bridge/runtime. Passing an
+    environment variable does not prove that a provider applied it.
 
     Examples:
       - Claude Code effort level:
           extra_env={"CLAUDE_CODE_EFFORT_LEVEL": "high"}
-      - Claude Code disable adaptive thinking (Opus 4.6 / Sonnet 4.6 only):
-          extra_env={"CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1",
-                     "MAX_THINKING_TOKENS": "32000"}
       - Codex reasoning (env-var route, alternative to -c flag):
           extra_env={"CODEX_REASONING_EFFORT": "high"}
       - Any custom env vars your CLI reads.
 
     Merged into the selected subprocess environment at launch — user-supplied
-    keys override inherited values. Empty dict = no overrides (default).
+    keys override inherited and adapter-provided values, including
+    ``ANTHROPIC_MODEL``. Empty dict = no overrides (default). Do not log this
+    mapping or copy real credentials into examples or issue reports.
     """
 
     def __post_init__(self) -> None:
@@ -548,7 +556,7 @@ class ACPConfig:
             integer_fields["max_turns"] = self.max_turns
         for name, value in integer_fields.items():
             if isinstance(value, bool) or not isinstance(value, int):
-                raise ValueError(f"{name} must be an integer, got {value!r}")
+                raise ValueError(f"{name} must be an integer")
 
         number_fields = {
             "pool_acquire_timeout": self.pool_acquire_timeout,
@@ -562,7 +570,7 @@ class ACPConfig:
         }
         for name, value in number_fields.items():
             if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise ValueError(f"{name} must be a number, got {value!r}")
+                raise ValueError(f"{name} must be a number")
 
         for name in (
             "pool_cross_session_reuse",
@@ -571,7 +579,7 @@ class ACPConfig:
             "enable_fallback",
         ):
             if not isinstance(getattr(self, name), bool):
-                raise ValueError(f"{name} must be a boolean, got {getattr(self, name)!r}")
+                raise ValueError(f"{name} must be a boolean")
         if (
             not isinstance(self.provider, str)
             or not self.provider
@@ -617,7 +625,7 @@ class ACPConfig:
             _require_valid_unicode(arg, "extra_args entry")
         for key, value in self.extra_env.items():
             _require_valid_unicode(key, "extra_env key")
-            _require_valid_unicode(value, f"extra_env value for {key!r}")
+            _require_valid_unicode(value, "extra_env value")
 
         # ``dataclasses.replace`` otherwise aliases caller-owned mutable
         # values across per-provider pool configurations.
@@ -627,35 +635,33 @@ class ACPConfig:
         self.extra_env = dict(self.extra_env)
 
         if self.pool_size < 1:
-            raise ValueError(f"pool_size must be >= 1, got {self.pool_size}")
+            raise ValueError("pool_size must be >= 1")
         if self.pool_max_connections < 1:
-            raise ValueError(f"pool_max_connections must be >= 1, got {self.pool_max_connections}")
+            raise ValueError("pool_max_connections must be >= 1")
         if self.pool_size > self.pool_max_connections:
-            raise ValueError(
-                f"pool_size must be <= pool_max_connections, got {self.pool_size} > {self.pool_max_connections}"
-            )
+            raise ValueError("pool_size must be <= pool_max_connections")
         if not _is_finite_number(self.pool_acquire_timeout) or self.pool_acquire_timeout <= 0:
-            raise ValueError(f"pool_acquire_timeout must be > 0, got {self.pool_acquire_timeout}")
+            raise ValueError("pool_acquire_timeout must be > 0")
         if not _is_finite_number(self.pool_idle_timeout) or self.pool_idle_timeout <= 0:
-            raise ValueError(f"pool_idle_timeout must be > 0, got {self.pool_idle_timeout}")
+            raise ValueError("pool_idle_timeout must be > 0")
         if not _is_finite_number(self.pool_keepalive_interval) or self.pool_keepalive_interval < 0:
-            raise ValueError(f"pool_keepalive_interval must be >= 0, got {self.pool_keepalive_interval}")
+            raise ValueError("pool_keepalive_interval must be >= 0")
         if not _is_finite_number(self.pool_max_age) or self.pool_max_age <= 0:
-            raise ValueError(f"pool_max_age must be > 0, got {self.pool_max_age}")
+            raise ValueError("pool_max_age must be > 0")
         if self.pool_max_uses < 1:
-            raise ValueError(f"pool_max_uses must be >= 1, got {self.pool_max_uses}")
+            raise ValueError("pool_max_uses must be >= 1")
         if not _is_finite_number(self.timeout_connect) or self.timeout_connect <= 0:
-            raise ValueError(f"timeout_connect must be > 0, got {self.timeout_connect}")
+            raise ValueError("timeout_connect must be > 0")
         if not _is_finite_number(self.timeout_prompt) or self.timeout_prompt <= 0:
-            raise ValueError(f"timeout_prompt must be > 0, got {self.timeout_prompt}")
+            raise ValueError("timeout_prompt must be > 0")
         if not _is_finite_number(self.timeout_stream) or self.timeout_stream <= 0:
-            raise ValueError(f"timeout_stream must be > 0, got {self.timeout_stream}")
+            raise ValueError("timeout_stream must be > 0")
         if self.max_retries < 0:
-            raise ValueError(f"max_retries must be >= 0, got {self.max_retries}")
+            raise ValueError("max_retries must be >= 0")
         if self.max_turns is not None and self.max_turns < 1:
-            raise ValueError(f"max_turns must be >= 1 when set, got {self.max_turns}")
+            raise ValueError("max_turns must be >= 1 when set")
         if not _is_finite_number(self.retry_base_delay) or self.retry_base_delay < 0:
-            raise ValueError(f"retry_base_delay must be >= 0, got {self.retry_base_delay}")
+            raise ValueError("retry_base_delay must be >= 0")
 
     @classmethod
     def from_env(cls, **overrides: Any) -> ACPConfig:
@@ -696,7 +702,14 @@ class ACPConfig:
                 return True
             if normalized in {"0", "false", "no", "off"}:
                 return False
-            raise ValueError(f"ACP_{key} must be one of true/false, 1/0, yes/no, on/off; got {value!r}")
+            raise ValueError(f"ACP_{key} must be one of true/false, 1/0, yes/no, on/off")
+
+        def _number_env(value: str, key: str, *, integer: bool = False) -> int | float:
+            try:
+                return int(value) if integer else float(value)
+            except ValueError:
+                kind = "integer" if integer else "number"
+                raise ValueError(f"ACP_{key} must be a valid {kind}") from None
 
         kwargs: dict[str, Any] = {}
 
@@ -710,31 +723,31 @@ class ACPConfig:
 
         v = _env("POOL_SIZE")
         if v:
-            kwargs["pool_size"] = int(v)
+            kwargs["pool_size"] = _number_env(v, "POOL_SIZE", integer=True)
 
         v = _env("POOL_MAX_CONNECTIONS")
         if v:
-            kwargs["pool_max_connections"] = int(v)
+            kwargs["pool_max_connections"] = _number_env(v, "POOL_MAX_CONNECTIONS", integer=True)
 
         v = _env("POOL_ACQUIRE_TIMEOUT")
         if v:
-            kwargs["pool_acquire_timeout"] = float(v)
+            kwargs["pool_acquire_timeout"] = _number_env(v, "POOL_ACQUIRE_TIMEOUT")
 
         v = _env("POOL_IDLE_TIMEOUT")
         if v:
-            kwargs["pool_idle_timeout"] = float(v)
+            kwargs["pool_idle_timeout"] = _number_env(v, "POOL_IDLE_TIMEOUT")
 
         v = _env("POOL_KEEPALIVE_INTERVAL")
         if v:
-            kwargs["pool_keepalive_interval"] = float(v)
+            kwargs["pool_keepalive_interval"] = _number_env(v, "POOL_KEEPALIVE_INTERVAL")
 
         v = _env("POOL_MAX_AGE")
         if v:
-            kwargs["pool_max_age"] = float(v)
+            kwargs["pool_max_age"] = _number_env(v, "POOL_MAX_AGE")
 
         v = _env("POOL_MAX_USES")
         if v:
-            kwargs["pool_max_uses"] = int(v)
+            kwargs["pool_max_uses"] = _number_env(v, "POOL_MAX_USES", integer=True)
 
         v = _bool_env("POOL_CROSS_SESSION_REUSE")
         if v is not None:
@@ -742,15 +755,15 @@ class ACPConfig:
 
         v = _env("TIMEOUT_CONNECT")
         if v:
-            kwargs["timeout_connect"] = float(v)
+            kwargs["timeout_connect"] = _number_env(v, "TIMEOUT_CONNECT")
 
         v = _env("TIMEOUT_PROMPT")
         if v:
-            kwargs["timeout_prompt"] = float(v)
+            kwargs["timeout_prompt"] = _number_env(v, "TIMEOUT_PROMPT")
 
         v = _env("TIMEOUT_STREAM")
         if v:
-            kwargs["timeout_stream"] = float(v)
+            kwargs["timeout_stream"] = _number_env(v, "TIMEOUT_STREAM")
 
         v = _env("CWD")
         if v:
@@ -770,15 +783,15 @@ class ACPConfig:
 
         v = _env("MAX_RETRIES")
         if v:
-            kwargs["max_retries"] = int(v)
+            kwargs["max_retries"] = _number_env(v, "MAX_RETRIES", integer=True)
 
         v = _env("RETRY_BASE_DELAY")
         if v:
-            kwargs["retry_base_delay"] = float(v)
+            kwargs["retry_base_delay"] = _number_env(v, "RETRY_BASE_DELAY")
 
         v = _env("MAX_TURNS")
         if v:
-            kwargs["max_turns"] = int(v)
+            kwargs["max_turns"] = _number_env(v, "MAX_TURNS", integer=True)
 
         kwargs.update(overrides)
         return cls(**kwargs)

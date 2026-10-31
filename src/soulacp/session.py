@@ -21,7 +21,7 @@ from soulacp.errors import (
     ACPResumeError,
 )
 from soulacp.pool import ACPConnectionPool
-from soulacp.privacy import exception_summary
+from soulacp.privacy import _raise_private_cause, exception_summary
 from soulacp.retry import _bounded_backoff, _inspect_partial_output, is_retryable
 from soulacp.session_store import ProviderSessionStore
 
@@ -247,7 +247,7 @@ class ManagedSession:
 
             except ACPResumeError as resume_error:
                 if prompt_started:
-                    raise ACPRequestOutcomeUnknownError(resume_error) from resume_error
+                    _raise_private_cause(ACPRequestOutcomeUnknownError(resume_error), resume_error)
                 if not resume_reset:
                     logger.warning("Stored session cannot be resumed; clearing it and creating a new session")
                     resume_reset = True
@@ -264,10 +264,10 @@ class ManagedSession:
             except (ConnectionError, asyncio.TimeoutError) as ce:
                 partial_output, partial_output_is_safe = _inspect_partial_output(ce)
                 if prompt_started:
-                    raise ACPRequestOutcomeUnknownError(
+                    _raise_private_cause(
+                        ACPRequestOutcomeUnknownError(ce, partial_output=partial_output),
                         ce,
-                        partial_output=partial_output,
-                    ) from ce
+                    )
                 if not partial_output_is_safe or partial_output:
                     raise
                 if attempt < max_attempts:
@@ -294,10 +294,10 @@ class ManagedSession:
                     raise
                 partial_output, partial_output_is_safe = _inspect_partial_output(exc)
                 if prompt_started:
-                    raise ACPRequestOutcomeUnknownError(
+                    _raise_private_cause(
+                        ACPRequestOutcomeUnknownError(exc, partial_output=partial_output),
                         exc,
-                        partial_output=partial_output,
-                    ) from exc
+                    )
                 if not partial_output_is_safe or partial_output:
                     raise
                 # Retry transient RPC errors using code-aware decision
@@ -399,7 +399,7 @@ class ManagedSession:
                             fb_err,
                             partial_output=partial_output,
                         )
-                    raise fb_err from primary_err
+                    _raise_private_cause(fb_err, primary_err, primary=True)
 
         if primary_err:
             raise primary_err

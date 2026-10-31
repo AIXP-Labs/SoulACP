@@ -17,6 +17,8 @@ English | [简体中文](README_CN.md)
 - [Usage](#usage)
 - [Session Management](#session-management)
 - [Configuration](#configuration)
+- [Privacy Boundaries](#privacy-boundaries)
+- [Error Handling](#error-handling)
 - [Architecture](#architecture)
 - [Testing](#testing)
 - [Project Documents](#project-documents)
@@ -44,15 +46,19 @@ English | [简体中文](README_CN.md)
 SoulACP requires Python 3.10 or later and at least one supported agent CLI or
 ACP bridge installed and, when required, authenticated.
 
-### Published release
+### Package-index release
 
 ```bash
-python -m pip install soulacp
+pip install soulacp
 ```
+
+GitHub and PyPI releases use the same version and are published together.
+Use `python -m pip install soulacp` to select a Python interpreter explicitly.
 
 ### Current source
 
-The source checkout can contain unreleased APIs documented in this README.
+You can also clone the GitHub repository and install from source locally.
+To install a particular release, check out its matching release tag first.
 
 ```bash
 git clone https://github.com/AIXP-Labs/SoulACP.git
@@ -62,6 +68,20 @@ python -m pip install -e .
 # Development and test tools
 python -m pip install -e ".[dev]"
 ```
+
+Repository hooks are installed separately with Python >=3.11; library and test
+support remains >=3.10. See [the hook environment](CONTRIBUTING.md#repository-hook-environment).
+
+Check the interpreter, distribution metadata, and imported module together:
+
+```bash
+python -c "import importlib.metadata as m, soulacp; print(m.version('soulacp')); print(soulacp.__version__)"
+```
+
+Both values should be `0.2.1` when validating this checkout. Locally inspect
+`soulacp.__file__` if the values differ; redact personal paths before sharing
+diagnostics. Editable installs, wheels, and downstream lock files are distinct
+installation sources. Replacing files does not reload an already-running worker.
 
 ### Optional telemetry
 
@@ -96,7 +116,7 @@ asyncio.run(main())
 
 ManagedSession automatically handles:
 
-- **Session reuse**: Same user_id gets same CLI session across requests
+- **Session reuse**: Reuse the user's logical session while its mapping remains valid and the provider supports restoration
 - **Explicit reset**: `reset_session(user_id)` clears a reviewed stale/overflowed session without implicit prompt replay
 - **Retry**: Exponential backoff on safe, pre-prompt transient failures
 - **Fallback**: Optional provider switch only when the prompt outcome is known not to be in progress
@@ -177,8 +197,15 @@ print("Installed:", installed)
 Install the current Claude and Codex ACP bridges with:
 
 ```bash
-npm install -g @agentclientprotocol/claude-agent-acp @agentclientprotocol/codex-acp
+npm install -g "@agentclientprotocol/claude-agent-acp@>=0.86.0" "@agentclientprotocol/codex-acp@>=2.1.1"
 ```
+
+Keep the quotes so the shell does not treat `>` as a redirect. These ranges
+match SoulACP 0.2.1's installation hints; they are not exact version pins or
+qualification of every later bridge/model combination. A bridge can bundle its
+own CLI/runtime, so upgrading a global `claude` or `codex` alone does not prove
+which runtime the bridge will use. Check the bridge's installed package metadata
+and its reported `agent_info` without copying credentials or full session state.
 
 The renamed Claude bridge is preferred; `claude-code-acp` remains a legacy
 compatibility fallback. The Codex bridge includes its runtime, but the
@@ -247,10 +274,17 @@ asyncio.run(main())
 
 | Variable | Values | Default | Purpose |
 |----------|--------|---------|---------|
-| `CODEX_REASONING_EFFORT` | `minimal` / `low` / `medium` / `high` / `xhigh` | `medium` | Reasoning budget |
+| `CODEX_REASONING_EFFORT` | Bridge/model-dependent; for example `high` | `medium` when unset | Forwarded reasoning configuration, not a locally validated enum |
 | `CODEX_SANDBOX_MODE` | `read-only` / `workspace-write` / `danger-full-access` | (codex default) | File-system permission |
 | `CODEX_APPROVAL_POLICY` | `untrusted` / `on-request` / `never` | (Codex default) | Approval prompts |
 | `CODEX_NETWORK_ACCESS` | `true` / `1` / `yes` | not injected | Opt in to network in `workspace-write`; other values leave Codex config unchanged |
+
+An explicit `model_reasoning_effort` in `ACPConfig.extra_args` takes precedence;
+otherwise SoulACP reads `extra_env` and then the permitted parent environment.
+An explicitly empty effort value injects no override. Accepted levels belong to
+the installed bridge and model. SoulACP does not inject a Claude effort default;
+use `extra_env` for provider-supported controls when needed, without including
+credentials in examples or diagnostics.
 
 The following disables approval prompts, allows workspace writes, and enables
 network access. Use it only in a trusted workspace:
@@ -290,7 +324,11 @@ and current Codex ACP bridge. Consult the
 [official model catalog](https://developers.openai.com/api/docs/models) instead
 of relying on legacy aliases.
 
-### Multi-Agent
+### Multiple Providers
+
+This example makes two sequential provider calls. SoulACP does not itself
+dispatch nested agents, implement a business workflow, or supply human approval
+for that workflow; those responsibilities remain with the calling application.
 
 ```python
 import asyncio
@@ -356,13 +394,18 @@ asyncio.run(main())  # Closing the session flushes pending file-cache writes
 | Event | Behavior |
 |-------|----------|
 | Successful first request | New CLI session created, mapping stored after pool release (TTL 7 days) |
-| Subsequent requests | Same user_id → same CLI session (reuse) |
+| Subsequent requests | Reuse the logical session when its mapping is valid and restoration succeeds |
 | Concurrent requests for one user/session | Serialized within one `ManagedSession` instance; different sessions can still run concurrently |
 | Context overflow | Raise to caller; call `reset_session(user_id)` only after deciding whether to submit a new turn |
 | Confirmed stale stored session | Clear that provider mapping once, then explicitly create a fresh session |
 | Pre-prompt connection/timeout error | Preserve the mapping and retry the same session within the configured attempt budget |
 | Prompt transport/RPC failure | Raise without retry or fallback because side effects may already exist |
 | Fallback | Switch provider only before prompt execution (e.g. startup failure); reuse that provider's own stored session |
+
+A logical session ID is not a promise that the original CLI process, child
+agents, or in-memory tools survive a disconnect. When restoration is unavailable,
+the managed session may clear the unusable mapping and start a fresh session;
+applications that require continuity must handle that distinction explicitly.
 
 ### Cache Backends
 
@@ -446,7 +489,16 @@ preferred when an agent advertises them. Configured models similarly use an
 advertised category `model` select option; an already-selected value emits no
 RPC, and the non-standard `session/set_model` method is only a compatibility
 fallback when no model option is advertised. Agent-pushed `config_option_update`
-and `current_mode_update` events keep both states current. `authenticate()`,
+and `current_mode_update` events keep both states current. For Claude, an
+explicit model supplies `ANTHROPIC_MODEL` before the ACP process starts, and
+model selection is checked again after resume. This is best-effort configuration,
+not a strict model-lock guarantee: `extra_env` is applied last and can override
+`ANTHROPIC_MODEL`; absent, ambiguous, or RPC-rejected model options can leave the
+provider's current selection in use. Transport, timeout, and protocol errors
+remain visible. Callers requiring an exact model must check the provider's
+reported selection rather than treating `ACPConfig.model` as confirmation of
+what served a request. Reported metadata is not independent model attestation.
+`authenticate()`,
 `logout()`, and `close_session()` expose the current ACP lifecycle methods and
 reject calls not advertised by the agent. Successful logout or closure of the
 active session invalidates pool reuse, so releasing that lease retires the
@@ -459,9 +511,10 @@ legacy `CursorCLIClient` exposes only the minimal `ACPClient` protocol.
 Only a leading `<provider>-acp/` or `<provider>/` namespace is removed from a
 configured model. Nested IDs such as `claude-acp/openai/gpt-5` therefore remain
 `openai/gpt-5`. When an executable explicitly returns JSON-RPC `-32601` for the
-legacy `session/set_model` fallback, soulacp warns once and caches that result
-for the same adapter/executable; later clients use the provider default without
-repeating the unsupported request.
+legacy `session/set_model` fallback, adapters using that fallback warn once and
+cache the result for the same adapter/executable; later clients skip the
+unsupported request. Skipping an unsupported RPC does not verify that the
+requested model was selected.
 
 ## Configuration
 
@@ -497,6 +550,11 @@ repeating the unsupported request.
 > OS sandbox. Set it to `false` for untrusted workspaces and review the provider
 > CLI's own permission model.
 
+Cancelled turns return a `cancelled` permission outcome for queued or late
+requests, and duplicate option IDs are rejected before selection. This does
+not change valid allow/reject policy or make ACP permission selection a human
+business-authorization gate.
+
 `pool_size` is not a concurrency limit. Total physical capacity is bounded by
 `pool_max_connections` for each pool instance. Each `ManagedSession` creates
 one pool per `provider:model` key, so N keys in one instance can reserve up to N
@@ -511,11 +569,17 @@ snapshot. Later caller or client mutation therefore cannot change the pool's
 validated capacity and lifecycle policy; construct a new pool to apply policy
 changes.
 
-Boolean environment variables accept only `true/false`, `1/0`, `yes/no`, or
+Boolean configuration variables parsed by `ACPConfig.from_env()` accept
+`true/false`, `1/0`, `yes/no`, or
 `on/off`; invalid values raise `ValueError` instead of silently disabling a
 feature. OpenClaw does not receive `--session` by default, so each ACP bridge
 uses its isolated session key. Setting `OPENCLAW_SESSION_KEY` deliberately opts
 into OpenClaw's shared/attached session routing.
+Configuration errors report fields and constraints without echoing raw input;
+invalid numeric environment values suppress the original parse exception chain.
+Session-control rejection messages omit supplied IDs and values; URL parser
+chains and strict JSON duplicate-key errors do not expose their input text.
+Raw structured exception fields, including `capability`, remain sensitive.
 
 ### Provider-specific environment variables
 
@@ -631,6 +695,16 @@ the standard best-effort `$/cancel_request` notification. Incoming
 reply starts and return JSON-RPC code `-32800`; prompt timeout cleanup still
 retires the transport so a late response cannot leak into a later lease.
 
+Native ACP disconnect also attempts best-effort descendant cleanup: POSIX uses
+the CLI's separate process group, and Windows uses recorded descendant PIDs
+with parent-chain checks. Detached processes, snapshot races, and permission
+failures are outside a guaranteed whole-tree cleanup contract. A cancel
+notification or a cleanup log entry is not proof that every descendant exited;
+an empty Windows snapshot, particularly after the CLI has exited, is not proof
+that no tools remain.
+Use OS job/container isolation when that guarantee is required. This does not
+extend TerminalService or legacy Cursor into a whole-tree termination API.
+
 Native client connect/disconnect operations are serialized. Prompt/stream and
 session load/resume operations are also serialized per client so a completed
 old prompt cannot overwrite a newly selected session. Concurrent callers cannot
@@ -721,14 +795,41 @@ metrics and RPC spans omit session IDs, prompts, error text, user IDs, paths,
 and PIDs. Telemetry backend failures are isolated and cannot replace operation
 results or exceptions.
 
+RPC span cleanup never receives the original exception or its traceback. Failed
+RPC spans retain a bounded error/cancellation category and error status without
+an exception event or status description. Development tests install the SDK to
+check real in-memory export; the runtime library still only uses the optional API.
+
 ### Privacy boundaries
 
 Default SoulACP logs and public exception strings redact provider messages,
 RPC data, session IDs, stderr, user IDs, and cache paths. `RPCError` and
-`ACPProviderError` retain raw fields for programmatic diagnosis; raw text is
+`ACPProviderError` and `ACPProtocolError` retain raw fields for programmatic diagnosis; raw text is
 rendered only through `format_diagnostic(include_sensitive=True)`. Setting
 `ACP_LOG_SENSITIVE_DATA=1` additionally enables raw provider diagnostics in
 library logs and should be limited to short-lived, access-controlled debugging.
+Protocol errors keep safe reason text public and provider values in `details`.
+File-cache persistence errors retain their OSError category and errno, with
+redacted public filenames. Their `cause` field retains the original I/O error
+for explicit private diagnosis; treat it as sensitive and do not print it.
+Response wrappers retain their original exception in `cause`; fallback failures
+also retain the earlier primary exception in `primary_cause`. Their default
+`__cause__` display chain now contains a safe summary, not the original object.
+Code that needs diagnostic identity must use the explicit raw fields. Full Python
+tracebacks can still expose source-file locations and caller-added notes and must
+be reviewed privately. Partial output is original response content, not a redacted
+diagnostic field; protect it as private application data.
+Claude model-selection values are omitted from default logs; sensitive opt-in
+renders them with escaped line breaks rather than additional log lines.
+
+Before sharing an issue, trace, or test report, remove credentials, authorization
+headers, cookies, prompts/responses, session IDs, personal paths, and identifying
+data. Do not attach `.env`, provider authentication files, session caches, raw
+configuration/state objects, or the output of `format_diagnostic(include_sensitive=True)`.
+Use synthetic reproductions and minimum necessary, reviewed diagnostics. The
+default redaction is not a guarantee about third-party CLI logs or application
+code that prints raw fields. `ACP_AUTO_APPROVE` controls ACP permission selection;
+it does not provide a human's approval for an application's business decision.
 
 `ProviderSessionStore` uses memory by default. An explicitly configured
 `FileCache` stores provider session IDs unencrypted and uses deterministic
@@ -744,6 +845,20 @@ native Cursor ACP adapter when process-list privacy is required. SoulACP agent
 subprocesses run as the current OS account and inherit the parent environment
 by default; minimal-environment mode does not change that OS trust boundary.
 This library is not a credential sandbox.
+
+### Error handling
+
+These are public imports from `soulacp`; catching an error does not establish
+whether external side effects occurred:
+
+| Error | Caller responsibility |
+|-------|-----------------------|
+| `ACPRequestOutcomeUnknownError` | Execution may have started. Do not automatically replay; reconcile external effects first. |
+| `ACPPartialResponseError` | `partial_output` is incomplete original content, not a successful answer or public diagnostic. |
+| `ACPProtocolError` | Treat malformed completion as failure; keep raw `details` private. |
+| `ACPPromptTimeoutError` / `ACPStreamTimeoutError` | The transport is retired; no automatic retry or provider fallback. |
+| `RPCError` | `is_retryable` classifies a control-plane error; it does not authorize replaying a prompt with an unknown outcome. |
+| `ACPResumeError` | Handle unavailable session restoration explicitly; a new logical session does not establish original-child continuity. |
 
 ## Architecture
 
@@ -763,31 +878,51 @@ ManagedSession (high-level API)
 ## Testing
 
 ```bash
-# Default suite (provider CLI and model calls are skipped)
-python -m pytest tests/ -v
+# Default suite, strict warnings and statement/branch coverage
+# Provider CLI and model calls are skipped unless explicitly enabled
+python -m pytest tests/ -W error -v --cov=soulacp --cov-branch --cov-report=term
 
 # Integration tests (requires installed and authenticated CLIs)
-python -m pytest --run-integration tests/test_integration.py -v          # Claude Code
-python -m pytest --run-integration tests/test_integration_gemini.py -v   # Gemini
-python -m pytest --run-integration tests/test_integration_codex.py -v    # Codex
+python -m pytest --run-integration tests/test_integration.py -W error -v          # Claude Code
+python -m pytest --run-integration tests/test_integration_gemini.py -W error -v   # Gemini
+python -m pytest --run-integration tests/test_integration_codex.py -W error -v    # Codex
 
 # All unit + integration + stdio stress tests
-python -m pytest --run-integration tests/ -v
+python -m pytest --run-integration tests/ -W error -v
 
 # Static checks used by CI
-python -m ruff check src/soulacp/ tests/ examples/
-python -m ruff format --check src/soulacp/ tests/ examples/
+python -m ruff check src/soulacp/ tests/ examples/ tools/
+python -m ruff format --check src/soulacp/ tests/ examples/ tools/
 python -m pyright
 # Bash; in PowerShell, set `$env:PYTHONPATH = "src"` first.
 PYTHONPATH=src python -m pyright --verifytypes soulacp --ignoreexternal
 python -m bandit -q -r src/soulacp
 
-# Build both source and wheel distributions
-python -m build
+# Build into a new, empty output directory; do not mix historical releases
+python tools/build_release.py --outdir dist/0.2.1
+python -m twine check dist/0.2.1/soulacp-0.2.1-py3-none-any.whl dist/0.2.1/soulacp-0.2.1.tar.gz
+python tools/check_sdist.py dist/0.2.1/soulacp-0.2.1.tar.gz
 ```
+
+Repository hooks use the separate Python >=3.11
+[hook environment](CONTRIBUTING.md#repository-hook-environment). `make check`
+runs lint, type, and security checks; it does not run tests, hooks, audits, or a
+build. The guarded build requires a nonexistent output path and never removes
+older artifacts; select another path for a later build.
+
+The CI badge links to GitHub Actions, not a receipt for this checkout or a local
+deployment. Record the exact source/artifact identity, platform, actual passes,
+failures and skips for each run. Local CI reproduction, remote GitHub CI,
+installed-wheel tests, and authenticated provider tests are separate results.
 
 Files named `test_integration*`, `test_spike_*`, and `test_stress_*` require
 `--run-integration`; the default suite intentionally skips them.
+
+Source tests select this checkout's `src` through `tests/conftest.py`; they do
+not by themselves validate an installed wheel. See the
+[release identity checklist](CONTRIBUTING.md#release-identity-and-privacy) for
+distribution hashes, a clean-install check, and privacy review. Do not overwrite
+an existing output directory or upload `dist/*` indiscriminately.
 
 ## Project Documents
 
@@ -795,7 +930,7 @@ Files named `test_integration*`, `test_spike_*`, and `test_stress_*` require
 |----------|---------|
 | [CHANGELOG.md](CHANGELOG.md) | Release history and behavioral changes |
 | [SECURITY.md](SECURITY.md) | Security policy and vulnerability reporting |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution workflow |
+| [CONTRIBUTING.md](CONTRIBUTING.md) / [CONTRIBUTING_CN.md](CONTRIBUTING_CN.md) | Contribution workflow |
 | [GOVERNANCE.md](GOVERNANCE.md) | Project governance and decision-making |
 | [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | Community standards |
 
@@ -807,16 +942,22 @@ AIXP Labs develops and maintains the following core projects:
 |---------|-------------|---------|
 | [HSAW](https://hsaw.dev) | Human Sovereignty and Wellbeing — Axiom 0 white paper (foundation) | hsaw.dev |
 | [AIZP](https://aizp.dev) | AI Zenith-Zero Protocol — runtime behavioral alignment | aizp.dev |
+| [AIIP](https://aiip.dev) | AI Intent Protocol — governed intent trees, priorities and feedback | aiip.dev |
+| [AIKP](https://aikp.dev) | AI Knowledge Protocol — long-term knowledge organization, navigation and governance | aikp.dev |
+| [AIJP](https://aijp.dev) | AI Job Protocol — schedulable work trees and job graphs | aijp.dev |
+| [AINP](https://ainp.dev) | AI Neogenesis Protocol — governable generation projects: plan + content + evidence | ainp.dev |
 | [AILP](https://ailp.dev) | AI List Protocol — agent discovery and capability advertising | ailp.dev |
 | [AIVP](https://aivp.dev) | AI Value Protocol — international commerce, crypto asset settlement | aivp.dev |
 | [AIRP](https://airp.dev) | AI RMB Protocol — Mainland China commerce, RMB licensed settlement | airp.dev |
 | [AIBP](https://aibp.dev) | AI Bot Protocol — social communication and trust | aibp.dev |
 | [AIAP](https://aiap.dev) | AI Application Protocol — governance and compliance | aiap.dev |
-| [AISP](https://aisp.dev) | AI Skill Protocol — single-file skills with machine-enforced contract red lines | aisp.dev |
+| [AISP](https://aisp.dev) | AI Skill Protocol — directory packages with a canonical AISOP skill entry and enforceable contract bindings | aisp.dev |
 | [AISOP](https://aisop.dev) | AI Standard Operating Protocol — flow program definition | aisop.dev |
+| [AIXPStore](https://aixpstore.dev) | Official marketplace for AIAP programs and AISP skills — discover, publish, and distribute AI capabilities | aixpstore.dev |
 | [SoulSkill](https://soulskill.dev) | AISP skill reference library & multi-CLI plugin distribution | soulskill.dev |
 | [SoulAgent](https://soulagent.dev) | Drop-in AI agent invoked directly by any CLI / SDK / IDE | soulagent.dev |
 | [SoulBot](https://soulbot.dev) | AI agent runtime & orchestration framework (scheduling, agent-spawn, inter-agent comms) | soulbot.dev |
+| [SoulRun](https://soulrun.dev) | AISOP execution engine as one call — runs AIAP programs and AISP skills for any host | soulrun.dev |
 | [SoulACP](https://soulacp.dev) | Adapter library — bridging CLI tools and LLM providers **(this project)** | soulacp.dev |
 
 ---
@@ -833,7 +974,7 @@ This software is **experimental** and provided for **research and educational pu
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.0. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.1. www.soulacp.dev
 
 <a id="alignment-philosophy"></a>
 

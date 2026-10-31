@@ -1,4 +1,7 @@
-"""Streaming response example."""
+"""Streaming example requiring an installed, authenticated provider CLI.
+
+Use synthetic input: yielded text is original content, not redacted diagnostics.
+"""
 
 import asyncio
 

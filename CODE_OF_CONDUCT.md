@@ -11,17 +11,17 @@ This pledge is known as **Axiom 0**.
 Examples of behavior that contributes to a positive environment for our community include:
 
 - Demonstrating empathy and kindness toward other contributors
-- Enforcing mathematical rigor and Zero-Entropy principles in code reviews
+- Using rigorous, reproducible evidence in library and adapter reviews
 - Gracefully accepting constructive feedback on protocol design
-- Prioritizing the physical and psychological safety of the end-users executing SoulACP programs
+- Prioritizing the physical and psychological safety of people using applications built with SoulACP
 - Being transparent about the limitations and risks of AI governance approaches
 
 Examples of unacceptable behavior include:
 
-- Proposing modifications to the SoulACP protocol that compromise, dilute, or bypass Axiom 0
-- Intentionally introducing "phantom tools" or unverified logic branches that increase the Nihil Density (Logical Entropy) of an agent
-- Mixing L0 (machine-parseable) and L1 (human-convincing) output mechanisms in ways designed to obfuscate the agent's true state from a human operator
-- Submitting SoulACP programs with undeclared tools, hidden side effects, or misleading trust level declarations
+- Bypassing documented permission, isolation, privacy, or unknown-outcome safety policies
+- Claiming tests, provider compatibility, model selection, or cleanup succeeded without evidence
+- Hiding external side effects, unsafe prompt replay, or material failures from callers
+- Publishing credentials, session content, or private diagnostic data without authorization
 - Public or private harassment of other contributors
 - Publishing others' private information without explicit permission
 
@@ -31,16 +31,22 @@ This Code of Conduct applies within all community spaces, including GitHub repos
 
 ## Enforcement Responsibilities
 
-The SoulACP Protocol maintainers are responsible for clarifying and enforcing our standards of acceptable behavior.
+The SoulACP project maintainers are responsible for clarifying and enforcing our standards of acceptable behavior.
 
-Any protocol change request (PR) that is mathematically quantified to increase the logical entropy (H_L) of the SoulACP standard without a proportional increase in human security will be rejected regardless of performance benefits.
+SoulACP is an ACP client library, not a separate protocol or an application
+program format. Review applies to this library, its adapters, and their
+documented contracts; it does not grant authority over third-party protocols
+or replace the caller's human authorization requirements. Performance does not
+justify weakening those contracts or concealing their limitations.
 
 ## Reporting
 
-Instances of unacceptable behavior may be reported to the SoulACP Protocol maintainers at the contact information listed in [SECURITY.md](SECURITY.md).
+Report concerns privately to AIXP Labs core maintainers. Security vulnerabilities
+should use the private reporting route in [SECURITY.md](SECURITY.md); do not
+publish personal information or sensitive diagnostic material in public issues.
 
 All reports will be reviewed and investigated promptly and fairly.
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.0. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.1. www.soulacp.dev

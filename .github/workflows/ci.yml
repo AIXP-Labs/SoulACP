@@ -20,13 +20,13 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,hooks]"
       - name: Repository hooks
-        run: pre-commit run --all-files
+        run: make hooks HOOKS_PYTHON="$(command -v python)"
       - name: Ruff check
-        run: ruff check src/soulacp/ tests/ examples/
+        run: ruff check src/soulacp/ tests/ examples/ tools/
       - name: Ruff format
-        run: ruff format --check src/soulacp/ tests/ examples/
+        run: ruff format --check src/soulacp/ tests/ examples/ tools/
       - name: Pyright
         run: pyright
       - name: Verify public type completeness
@@ -36,9 +36,19 @@ jobs:
       - name: Bandit
         run: bandit -q -r src/soulacp
       - name: Build distributions
-        run: python -m build
+        run: python tools/build_release.py --outdir dist/ci-build
       - name: Validate distribution metadata
-        run: python -m twine check dist/*
+        run: python -m twine check dist/ci-build/*
+      - name: Verify source distribution inputs
+        run: python tools/check_sdist.py dist/ci-build/*.tar.gz
+      - name: Audit minimum repository-hook dependencies
+        run: |
+          python -m pip install pip-audit==2.10.1 uv==0.7.21
+          pip-audit -r requirements-hooks.txt
+      - name: Audit frozen dependencies on Linux
+        run: |
+          uv export --no-config --frozen --all-extras --no-hashes --no-emit-project --format requirements-txt --output-file "$RUNNER_TEMP/soulacp-lock-audit.txt"
+          pip-audit -r "$RUNNER_TEMP/soulacp-lock-audit.txt"
 
   minimum-dependencies:
     runs-on: ubuntu-latest
@@ -51,11 +61,11 @@ jobs:
       - name: Install minimum supported development stack
         run: pip install -e ".[dev]" -c requirements-min.txt
       - name: Run tests with branch coverage
-        run: pytest tests/ -W error -q --cov=soulacp --cov-report=term
+        run: pytest tests/ -W error -q --cov=soulacp --cov-branch --cov-report=term
       - name: Ruff check
-        run: ruff check src/soulacp/ tests/ examples/
+        run: ruff check src/soulacp/ tests/ examples/ tools/
       - name: Ruff format
-        run: ruff format --check src/soulacp/ tests/ examples/
+        run: ruff format --check src/soulacp/ tests/ examples/ tools/
       - name: Pyright
         run: pyright
       - name: Verify public type completeness
@@ -65,7 +75,7 @@ jobs:
       - name: Bandit
         run: bandit -q -r src/soulacp
       - name: Build and validate distributions
-        run: python -m build && python -m twine check dist/*
+        run: python tools/build_release.py --outdir dist/ci-minimum
       - name: Audit minimum development dependencies
         run: |
           python -m pip install pip-audit==2.10.1
@@ -87,4 +97,4 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev]"
       - name: Run unit tests with coverage
-        run: pytest tests/ -W error -v --cov=soulacp --cov-report=xml
+        run: pytest tests/ -W error -v --cov=soulacp --cov-branch --cov-report=xml

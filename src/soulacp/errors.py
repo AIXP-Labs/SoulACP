@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from soulacp.privacy import public_exception_summary
+from soulacp.privacy import _bind_private_cause, public_exception_summary
 
 
 class ACPError(Exception):
@@ -75,15 +75,17 @@ class ACPUnsupportedCapabilityError(ACPError):
 
     capability: str
 
-    def __init__(self, capability: str) -> None:
+    def __init__(self, capability: str, *, public_capability: str | None = None) -> None:
         self.capability = capability
-        super().__init__(f"ACP agent does not advertise capability {capability!r}")
+        label = capability if public_capability is None else public_capability
+        super().__init__(f"ACP agent does not advertise capability {label!r}")
 
 
 class ACPResponseError(ACPError):
     """Base class for failed responses that may contain partial text."""
 
     partial_output: str
+    primary_cause: BaseException | None = None
 
     def __init__(self, message: str, *, partial_output: str = "") -> None:
         self.partial_output = partial_output
@@ -102,7 +104,7 @@ class ACPPartialResponseError(ACPResponseError):
             f"ACP response failed after {len(partial_output)} partial characters: {public_exception_summary(cause)}",
             partial_output=partial_output,
         )
-        self.__cause__ = cause
+        _bind_private_cause(self, cause)
 
 
 class ACPRequestOutcomeUnknownError(ACPResponseError):
@@ -122,11 +124,26 @@ class ACPRequestOutcomeUnknownError(ACPResponseError):
             f"ACP prompt outcome is unknown after transport failure: {public_exception_summary(cause)}",
             partial_output=partial_output,
         )
-        self.__cause__ = cause
+        _bind_private_cause(self, cause)
 
 
 class ACPProtocolError(ACPResponseError):
     """Raised when an agent returns a malformed prompt lifecycle response."""
+
+    message: str
+    details: Any
+
+    def __init__(self, message: str, *, partial_output: str = "", details: Any = None) -> None:
+        self.message = message
+        self.details = details
+        super().__init__(self.format_diagnostic(include_sensitive=False), partial_output=partial_output)
+
+    def format_diagnostic(self, *, include_sensitive: bool = False) -> str:
+        """Keep provider values out of public strings, retaining explicit diagnostics."""
+        if self.details is None:
+            return self.message
+        detail = repr(self.details) if include_sensitive else "<redacted>"
+        return f"{self.message} | details={detail}"
 
 
 class ACPPromptTimeoutError(ACPResponseError):

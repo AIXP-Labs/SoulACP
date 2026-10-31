@@ -44,14 +44,33 @@ when request outcome is unknown.
    addition, documentation, or breaking API work.
 3. Implementation includes focused unit tests and integration coverage where a
    real authenticated CLI is reasonably available.
-4. Required checks are unit tests, Ruff lint/format, Pyright, and distribution
-   build. Provider integration tests are opt-in because they require external
-   binaries and credentials.
+4. Required checks follow the repository workflow: strict-warning unit tests
+   with statement/branch coverage, repository hooks in their supported tool
+   environment, Ruff lint/format including `tools/`, Pyright and public type
+   completeness, Bandit, guarded distribution build, archive-input checks and
+   dependency audits. `make check` is only the lint/type/Bandit subset.
+   Provider integration tests are opt-in because they require external
+   binaries, credentials and explicit authorization.
 5. User-visible behavior is documented in both README languages and the
    changelog before release.
 
+Documentation must describe implemented behavior and its limits, not turn
+best-effort model selection, session restoration, or process cleanup into an
+unimplemented guarantee. Diagnostic examples and release evidence must use
+synthetic or reviewed, redacted data; privacy is not waived by debugging or CI.
+
 Security-sensitive changes may be developed privately under the coordinated
 disclosure process.
+
+## Qualification Records
+
+Keep these claims separate: configured CI matrix, actual local execution,
+GitHub-hosted runs, installed-distribution checks, downstream deployment and
+authenticated provider/model tests. A badge, registry entry or successful build
+does not substitute for another scope. Record failures, existing skips, tested
+Python/platform combinations and exact source/artifact hashes; do not weaken
+assertions, warnings, coverage or dependency audits to obtain a green result.
+Do not upload local runtime snapshots, raw diagnostics or private backups.
 
 ## Adapter Requirements
 
@@ -75,6 +94,23 @@ SoulACP follows Semantic Versioning:
 Pre-1.0 releases may refine APIs more quickly, but breaking changes still
 require explicit changelog and migration guidance.
 
+The current source target is **0.2.1**. A patch must preserve the documented
+public API and safety policy. Source metadata, installed metadata, import
+location, distribution contents, and downstream lock files are separate
+identities to verify. Historical changelog entries retain their own versions;
+version footers and existing dates are not publication receipts. Follow the
+[release identity checklist](CONTRIBUTING.md#release-identity-and-privacy)
+before selecting artifacts. Provider integrations and external availability
+must be reported with their actual tested scope, not inferred from a version
+string or registry entry.
+
+The 0.2.1 safe-exception-chain adjustment has an explicit migration boundary:
+original wrapped errors are available through `cause`, and an earlier fallback
+error through `primary_cause`; `__cause__` now displays a safe summary rather
+than preserving the original object's identity. This documented change does not
+authorize additional compatibility breaks or unsafe prompt replay. Older
+changelog entries describe their historical versions, not today's defaults.
+
 ## Axiom 0
 
 Human Sovereignty and Wellbeing is the project's immutable guiding constraint.
@@ -83,4 +119,4 @@ testable safety and compatibility contracts described above.
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.0. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.1. www.soulacp.dev

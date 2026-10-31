@@ -14,6 +14,7 @@ MANIFEST
 
 # Virtual environments
 .venv/
+.venv-hooks/
 venv/
 ENV/
 env/
@@ -49,6 +50,13 @@ coverage.xml
 .env
 .env.*
 .env.local
+/sessions.json
+/examples/sessions.json
+/.soulacp/
+/auth.json
+/.pypirc
+/.codex/auth.json
+/.claude/settings.local.json
 
 # OS
 .DS_Store

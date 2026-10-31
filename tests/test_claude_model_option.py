@@ -9,8 +9,8 @@ from soulacp.adapters.claude_client import ClaudeACPClient
 from soulacp.config import ACPConfig
 
 
-def make_client() -> ClaudeACPClient:
-    client = ClaudeACPClient(ACPConfig(provider="claude", model="claude-acp/claude-fable-5"))
+def make_client(model: str = "claude-fable-5") -> ClaudeACPClient:
+    client = ClaudeACPClient(ACPConfig(provider="claude", model=f"claude-acp/{model}"))
     client.session_id = "sess-1"
     return client
 
@@ -96,6 +96,53 @@ async def test_current_model_and_current_alias_skip_rpc():
 
 
 @pytest.mark.asyncio
+async def test_concrete_model_matches_selected_picker_alias_description():
+    client = make_client("claude-opus-4-8")
+    client.session_config_options = [
+        {
+            "id": "model",
+            "name": "Model",
+            "category": "model",
+            "type": "select",
+            "currentValue": "opus[1m]",
+            "options": [
+                {
+                    "value": "opus[1m]",
+                    "name": "Opus",
+                    "description": "Opus 4.8 with 1M context",
+                }
+            ],
+        }
+    ]
+
+    async def fail_rpc(method, params, timeout=None):  # pragma: no cover - must not run
+        raise AssertionError("RPC must not run when the startup pin already selected the requested model")
+
+    client._rpc = fail_rpc  # type: ignore[method-assign]
+    assert await client._select_model_config_option("claude-opus-4-8") is True
+
+
+def test_picker_alias_description_does_not_hide_generation_mismatch():
+    model_opt = {
+        "id": "model",
+        "currentValue": "opus[1m]",
+        "options": [
+            {
+                "value": "opus[1m]",
+                "name": "Opus",
+                "description": "Opus 4.8 with 1M context",
+            }
+        ],
+    }
+    assert ClaudeACPClient._model_option_is_selected("claude-opus-5", model_opt) is False
+
+
+def test_configured_model_is_pinned_in_claude_subprocess_environment():
+    assert make_client("claude-opus-5")._get_acp_env() == {"ANTHROPIC_MODEL": "claude-opus-5"}
+    assert make_client("default")._get_acp_env() == {}
+
+
+@pytest.mark.asyncio
 async def test_no_match_degrades_without_rpc():
     client = make_client()
     capture_model_options(client, ["default", "claude-opus-4-8", "claude-haiku-4-5"])
@@ -161,3 +208,25 @@ async def test_initialize_applies_the_configured_model_after_session_new():
 
     assert client.session_id == "sess-1"
     assert selected == ["claude-fable-5"]
+
+
+@pytest.mark.asyncio
+async def test_resume_revalidates_the_configured_model():
+    client = make_client("claude-opus-5")
+    client.agent_capabilities = {"sessionCapabilities": {"resume": {}}}
+    selected: list[str] = []
+
+    async def fake_rpc(method, params, timeout=None):
+        assert method == "session/resume"
+        return model_options_res(["default", "claude-opus-5"], current="claude-opus-5")
+
+    async def capture_selection(model_id: str) -> bool:
+        selected.append(model_id)
+        return True
+
+    client._rpc = fake_rpc  # type: ignore[method-assign]
+    client._select_model_config_option = capture_selection  # type: ignore[method-assign]
+
+    assert await client.resume("sess-resumed") is True
+    assert client.session_id == "sess-resumed"
+    assert selected == ["claude-opus-5"]

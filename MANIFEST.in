@@ -8,10 +8,13 @@ include SECURITY.md
 include .gitattributes
 include .gitignore
 include .pre-commit-config.yaml
+include .github/pull_request_template.md
 include Makefile
 include requirements-dev.txt
 include requirements-min.txt
+include requirements-hooks.txt
 include uv.lock
 recursive-include .github *.yml
 recursive-include examples *.py
 recursive-include tests *.py
+recursive-include tools *.py

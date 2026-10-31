@@ -15,21 +15,21 @@ class CodexACPClient(ACPClientBase):
     """ACP client for OpenAI Codex via codex-acp adapter.
 
     Requires:
-        - codex-acp binary (``npm install -g @agentclientprotocol/codex-acp``)
+        - codex-acp binary (``npm install -g "@agentclientprotocol/codex-acp@>=2.1.1"``)
         - One of:
             (a) ``codex login`` (ChatGPT account auth — recommended,
                 exposes the models enabled for that account)
-            (b) ``OPENAI_API_KEY`` env var (API-key auth — codex-acp
-                picks it up automatically from environment)
+            (b) API-key authentication configured for the installed bridge.
 
     Design mirrors ``ClaudeACPClient``: no explicit ``authenticate`` RPC,
     relying on codex-acp to use whatever auth it has locally
-    (``~/.codex/auth.json`` for ChatGPT or env var for API key).
-    Model is set per-session via ``session/set_model`` RPC, so callers
-    can switch models without editing ``~/.codex/config.toml``.
+    (the configured credential store or API-key authentication path).
+    Model selection prefers an advertised model config option; legacy
+    ``session/set_model`` is only the compatibility fallback. This does not
+    independently attest which model served a request.
 
-    **Reasoning effort**: defaults to ``"medium"`` (OpenAI's recommended
-    balance). 3 ways to override, in priority order:
+    **Reasoning effort**: this adapter injects ``"medium"`` when the setting
+    is absent. Override precedence:
 
     1. ``ACPConfig.extra_args`` (Python code, highest priority)::
 
@@ -44,48 +44,48 @@ class CodexACPClient(ACPClientBase):
 
     3. Built-in default ``"medium"`` if neither of the above is set.
 
-    Valid levels (5): ``minimal`` | ``low`` | ``medium`` | ``high`` | ``xhigh``
-    (per https://developers.openai.com/codex/config-reference).
+    An explicitly empty value suppresses injection. Accepted levels depend on
+    the installed bridge/model; SoulACP forwards, rather than validates, them.
 
     **Permission model**: Codex has TWO independent controls. Both are
-    optional — if unset, Codex uses its safer built-in defaults
-    (read-only + untrusted prompts):
+    optional. When unset here, SoulACP injects no override; the installed
+    runtime and its effective configuration determine the policy:
 
     - ``CODEX_SANDBOX_MODE`` env var: ``read-only`` | ``workspace-write`` |
       ``danger-full-access``. Controls WHAT Codex can touch.
-    - ``CODEX_APPROVAL_POLICY`` env var: ``untrusted`` | ``on-failure`` |
-      ``on-request`` | ``never``. Controls WHEN Codex pauses to ask.
+    - ``CODEX_APPROVAL_POLICY`` env var: provider-supported approval policy,
+      such as ``on-request`` or ``never``. Controls WHEN Codex pauses to ask.
 
-    To replicate Claude's ``--permission-mode dontAsk`` for in-workspace
-    flows, set in ``.env``::
+    To request workspace writes without approval prompts, set::
 
         CODEX_SANDBOX_MODE=workspace-write
         CODEX_APPROVAL_POLICY=never
 
     Optional ``CODEX_NETWORK_ACCESS=true`` opt-in for network access under
-    ``workspace-write`` (needed for AISOP tools like google_search,
-    web_browser, or pip install). Silently no-op under read-only or
-    danger-full-access (the latter has network on by default).
+    ``workspace-write``. This injects that sandbox's network configuration,
+    not a cross-sandbox network grant. Effective enforcement belongs to the
+    installed runtime; these settings are not human business authorization.
 
     These can also be passed via ``ACPConfig.extra_args`` (e.g.
     ``["-c", 'sandbox_mode="workspace-write"']``) which takes precedence.
 
-    Source: https://developers.openai.com/codex/agent-approvals-security
+    Review the runtime's effective policy locally; do not share credentials,
+    authentication stores, or raw configuration dumps in diagnostics.
     """
 
     def _get_acp_command(self) -> list[str]:
         binary = find_codex_binary()
         if not binary:
-            raise FileNotFoundError("codex-acp not found. Install with: npm install -g @agentclientprotocol/codex-acp")
+            raise FileNotFoundError(
+                'codex-acp not found. Install with: npm install -g "@agentclientprotocol/codex-acp@>=2.1.1"'
+            )
         cmd = [binary]
 
         # Reasoning effort resolution (precedence high → low):
         #   1. user's extra_args (-c model_reasoning_effort=...)  — explicit Python override
         #   2. CODEX_REASONING_EFFORT child env                   — config / shell control
-        #   3. default "medium"                                    — OpenAI's recommended balance
-        #
-        # 5 levels per Codex config-reference (https://developers.openai.com/codex/config-reference):
-        #   minimal / low / medium / high / xhigh
+        #   3. adapter default "medium"; an explicit empty value injects nothing.
+        # Accepted values are validated by the installed bridge/runtime.
         user_args_str = " ".join(self.config.extra_args or [])
         if "model_reasoning_effort" not in user_args_str:
             effort = (self._child_env_value("CODEX_REASONING_EFFORT", "medium") or "").strip()
@@ -93,34 +93,28 @@ class CodexACPClient(ACPClientBase):
                 cmd.extend(["-c", f'model_reasoning_effort="{effort}"'])
 
         # Sandbox mode (optional — when set, controls what Codex can touch):
-        #   read-only (Codex default, safe)
+        #   read-only
         #   workspace-write (write within workspace, no network)
         #   danger-full-access (full system access, DANGEROUS)
         #
-        # NO default injection — Codex's own default ("read-only") is safer
-        # than anything we'd inject. Set CODEX_SANDBOX_MODE explicitly to
-        # opt into write permissions.
+        # No default injection: leave the runtime's effective config in force.
+        # Set CODEX_SANDBOX_MODE explicitly to request an override.
         if "sandbox_mode" not in user_args_str:
             sandbox = (self._child_env_value("CODEX_SANDBOX_MODE", "") or "").strip()
             if sandbox:
                 cmd.extend(["-c", f'sandbox_mode="{sandbox}"'])
 
         # Approval policy (optional — when set, controls when Codex stops to ask):
-        #   untrusted (Codex default, prompts for risky ops)
-        #   on-failure (only ask when sandbox blocks)
-        #   on-request (model decides)
-        #   never (NEVER ask — equivalent to Claude --permission-mode dontAsk)
+        # Values and enforcement belong to the installed runtime; they are not
+        # equivalent to another provider's permission policy or human consent.
         if "approval_policy" not in user_args_str:
             approval = (self._child_env_value("CODEX_APPROVAL_POLICY", "") or "").strip()
             if approval:
                 cmd.extend(["-c", f'approval_policy="{approval}"'])
 
         # Network access in workspace-write sandbox (optional opt-in):
-        # workspace-write defaults to no network; needed for AISOP tools like
-        # google_search / web_browser, or for pip install during AIAP runs.
-        # Only meaningful when sandbox_mode == "workspace-write" (Codex
-        # silently ignores when sandbox_mode == "read-only" or
-        # "danger-full-access" — the latter has network on by default).
+        # Inject only this sandbox's configuration key, not a general network
+        # grant. Other sandbox policies remain the runtime's responsibility.
         if "sandbox_workspace_write.network_access" not in user_args_str:
             net = (self._child_env_value("CODEX_NETWORK_ACCESS", "") or "").strip().lower()
             if net in ("true", "1", "yes"):
@@ -129,7 +123,7 @@ class CodexACPClient(ACPClientBase):
         return cmd
 
     async def _initialize(self) -> None:
-        """Perform Codex ACP handshake: initialize → initialized → session/new → set_model."""
+        """Initialize, create a session, then attempt supported model selection."""
         # 1. initialize
         await self._rpc(
             "initialize",
@@ -163,7 +157,8 @@ class CodexACPClient(ACPClientBase):
             raise ConnectionError("session/new did not return sessionId")
         logger.info("Codex session established")
 
-        # 4. session/set_model — set per-session model (mirrors Claude pattern).
+        # 4. Prefer an advertised model config option; use the legacy fallback
+        #    only when no model option is advertised.
         #    Model id format: "codex-acp/gpt-5.5" → strip prefix → "gpt-5.5".
         #    Availability depends on the active ChatGPT or API credentials;
         #    gpt-5.5 is a compatibility example, not a hard-coded default.

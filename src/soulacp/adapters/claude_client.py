@@ -4,13 +4,41 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+from typing import Any
 
 from soulacp.adapters.base_client import ACPClientBase, RPCError
 from soulacp.binary import find_claude_binary
 from soulacp.meta import CLIENT_NAME, __version__
-from soulacp.privacy import exception_summary
+from soulacp.privacy import exception_summary, sensitive_logging_enabled
 
 logger: logging.Logger = logging.getLogger(__name__)
+
+_MODEL_CONTEXT_HINT_RE = re.compile(r"(?:\[\d+m\]|-\d+m\b)", re.IGNORECASE)
+_MODEL_FAMILY_VERSION_RE = re.compile(
+    r"\b(opus|sonnet|haiku|fable)[^a-z0-9]+(\d+)(?:[-.\s](\d+))?",
+    re.IGNORECASE,
+)
+
+
+def _canonical_model_id(value: str) -> str:
+    """Normalize model labels while retaining the model generation."""
+    without_context = _MODEL_CONTEXT_HINT_RE.sub("", value.strip().lower())
+    return re.sub(r"[^a-z0-9]+", "", without_context)
+
+
+def _model_family_version(value: str) -> tuple[str | None, str | None]:
+    """Extract a Claude family and optional generation from an ACP label."""
+    without_context = _MODEL_CONTEXT_HINT_RE.sub("", value.lower())
+    family = next(
+        (candidate for candidate in ("opus", "sonnet", "haiku", "fable") if candidate in without_context),
+        None,
+    )
+    match = _MODEL_FAMILY_VERSION_RE.search(without_context)
+    if match is None:
+        return family, None
+    major, minor = match.group(2), match.group(3)
+    return match.group(1).lower(), f"{major}.{minor}" if minor else major
 
 
 class ClaudeACPClient(ACPClientBase):
@@ -18,16 +46,17 @@ class ClaudeACPClient(ACPClientBase):
 
     Handles Claude-specific initialization, session creation, and resume.
 
-    **Effort level**: defaults to ``auto`` (adaptive thinking — Claude
-    Opus 4.7's recommended behavior; model decides depth per step).
-    Override via ``ACPConfig.extra_env``::
+    **Effort level**: this adapter does not inject a default. The installed
+    bridge/runtime and its configuration determine the effective value.
+    Request a provider-supported level via ``ACPConfig.extra_env``::
 
         ACPConfig(provider="claude", model="claude-acp/opus",
                   extra_env={"CLAUDE_CODE_EFFORT_LEVEL": "high"})
 
-    Levels: ``low`` | ``medium`` | ``high`` | ``xhigh`` | ``max`` | ``auto``.
-    ACP bridges do not consistently forward ``--effort`` to the underlying
-    Claude runtime, so the environment variable is the reliable control surface.
+    Accepted values depend on the bridge and model; SoulACP does not validate
+    this provider-specific enum. The variable is passed in the child environment,
+    not by assuming the bridge forwards a provider CLI's ``--effort`` flag.
+    Do not include credentials or raw environment values in shared diagnostics.
     """
 
     def _get_acp_command(self) -> list[str]:
@@ -35,9 +64,20 @@ class ClaudeACPClient(ACPClientBase):
         self._binary = find_claude_binary()
         if not self._binary:
             raise FileNotFoundError(
-                "Claude ACP bridge not found. Install with: npm install -g @agentclientprotocol/claude-agent-acp"
+                'Claude ACP bridge not found. Install with: npm install -g "@agentclientprotocol/claude-agent-acp@>=0.86.0"'
             )
         return [self._binary]
+
+    def _get_acp_env(self) -> dict[str, str]:
+        """Pin the configured model before Claude creates or resumes a session.
+
+        Provide ``ANTHROPIC_MODEL`` before new/resume so the bridge can use it
+        when constructing a session. ``ACPConfig.extra_env`` is applied later
+        and can override it. Picker matching remains best effort, so this is
+        not a strict guarantee of the active model or its underlying identity.
+        """
+        model_id = self._configured_model_id()
+        return {"ANTHROPIC_MODEL": model_id} if model_id else {}
 
     async def _initialize(self) -> None:
         """Perform Claude-specific protocol handshake and create a session."""
@@ -55,7 +95,7 @@ class ClaudeACPClient(ACPClientBase):
         )
 
         # Create session
-        session_params = {
+        session_params: dict[str, Any] = {
             "cwd": self.config.cwd or os.getcwd(),
             "mcpServers": [],
         }
@@ -105,8 +145,11 @@ class ClaudeACPClient(ACPClientBase):
 
         config_id = model_opt["id"]
         current = model_opt["currentValue"]
-        if current == model_id:
-            logger.debug("Configured Claude model is already selected")
+        if self._model_option_is_selected(model_id, model_opt):
+            if sensitive_logging_enabled():
+                logger.info("Claude model active: requested=%r selected=%r", model_id, current)
+            else:
+                logger.info("Configured Claude model is already selected")
             return True
 
         values = self._select_option_values(model_opt["options"], config_id=config_id)
@@ -123,23 +166,72 @@ class ClaudeACPClient(ACPClientBase):
         try:
             await self.set_config_option(config_id, chosen)
         except RPCError as exc:
-            logger.warning(
-                "set_config_option(model=%s) rejected; using provider default: %s",
-                chosen,
-                exception_summary(exc),
-            )
+            if sensitive_logging_enabled():
+                logger.warning(
+                    "set_config_option(model=%r) rejected; using provider default: %s", chosen, exception_summary(exc)
+                )
+            else:
+                logger.warning("set_config_option(model) rejected; using provider default: %s", exception_summary(exc))
             return False
-        logger.info("ACP model selected via config option: %s", chosen)
+        if sensitive_logging_enabled():
+            logger.info("ACP model selected via config option: %r", chosen)
+        else:
+            logger.info("ACP model selected via config option")
         return True
+
+    @staticmethod
+    def _model_option_is_selected(model_id: str, model_opt: dict[str, Any]) -> bool:
+        """Return whether an advertised picker value represents ``model_id``.
+
+        Claude's picker may expose ``opus[1m]`` while the caller pins
+        ``claude-opus-4-8``. The selected option's description carries the
+        resolved generation, so compare family and generation without treating
+        the context-window hint as a model version.
+        """
+        current = model_opt.get("currentValue")
+        if not isinstance(current, str):
+            return False
+        if _canonical_model_id(current) == _canonical_model_id(model_id):
+            return True
+
+        selected = next(
+            (
+                option
+                for option in model_opt.get("options", [])
+                if isinstance(option, dict) and option.get("value") == current
+            ),
+            None,
+        )
+        labels = [current]
+        if selected is not None:
+            labels.extend(value for key in ("name", "description") if isinstance((value := selected.get(key)), str))
+        candidate = " ".join(labels)
+        requested_family, requested_version = _model_family_version(model_id)
+        selected_family, selected_version = _model_family_version(candidate)
+        if requested_family is None or requested_family != selected_family:
+            return False
+        if requested_version is None:
+            return True
+        return requested_version == selected_version
 
     async def resume(self, session_id: str) -> bool:
         """Resume a previous Claude session via session/resume."""
         extra_params = None
         if self.config.max_turns is not None:
             extra_params = {"_meta": {"claudeCode": {"options": {"maxTurns": self.config.max_turns}}}}
-        return await self._resume_if_available(
+        resumed = await self._resume_if_available(
             "session/resume",
             session_id,
             agent_name="Claude",
             extra_params=extra_params,
         )
+        if not resumed:
+            return False
+
+        # Current claude-agent-acp versions reassert ANTHROPIC_MODEL during
+        # resume. Verify the returned state and retain config-option fallback
+        # for older bridges instead of silently keeping the transcript model.
+        model_id = self._configured_model_id()
+        if model_id:
+            await self._select_model_config_option(model_id)
+        return True

@@ -32,7 +32,7 @@ from soulacp.errors import (
     ACPResponseError,
     ACPStreamTimeoutError,
 )
-from soulacp.privacy import exception_summary
+from soulacp.privacy import _raise_private_cause, exception_summary
 
 logger: logging.Logger = logging.getLogger(__name__)
 MAX_CURSOR_STDOUT_BYTES = 10 * 1024 * 1024
@@ -141,7 +141,7 @@ class CursorCLIClient:
                         remaining,
                     )
                 except asyncio.TimeoutError as exc:
-                    raise ACPPromptTimeoutError(self.config.timeout_prompt) from exc
+                    _raise_private_cause(ACPPromptTimeoutError(self.config.timeout_prompt), exc)
 
                 error_text = stderr.decode("utf-8", errors="replace").strip()
                 if process.returncode:
@@ -150,16 +150,16 @@ class CursorCLIClient:
                         details=error_text,
                         returncode=process.returncode,
                     )
-                    raise ACPPartialResponseError(cause) from cause
+                    _raise_private_cause(ACPPartialResponseError(cause), cause)
                 try:
                     output = stdout.decode("utf-8").strip()
                 except UnicodeDecodeError as exc:
-                    raise ACPProtocolError("Cursor CLI json output is not valid UTF-8") from exc
+                    _raise_private_cause(ACPProtocolError("Cursor CLI json output is not valid UTF-8"), exc)
                 try:
                     payload = strict_json_loads(output)
                     _validate_json_values(payload, "Cursor CLI JSON")
                 except (json.JSONDecodeError, ValueError, RecursionError) as exc:
-                    raise ACPProtocolError("Cursor CLI json output was malformed") from exc
+                    _raise_private_cause(ACPProtocolError("Cursor CLI json output was malformed"), exc)
                 if not isinstance(payload, dict) or payload.get("type") != "result":
                     raise ACPProtocolError("Cursor CLI json output is missing the terminal result event")
                 self._remember_session(payload)
@@ -168,7 +168,7 @@ class CursorCLIClient:
                         "Cursor CLI",
                         details=str(payload.get("result") or "Cursor CLI reported failure"),
                     )
-                    raise ACPPartialResponseError(cause) from cause
+                    _raise_private_cause(ACPPartialResponseError(cause), cause)
                 result = payload.get("result")
                 if not isinstance(result, str):
                     raise ACPProtocolError("Cursor CLI result event is missing string result text")
@@ -177,7 +177,7 @@ class CursorCLIClient:
                 raise
             except Exception as exc:
                 if process is not None:
-                    raise ACPRequestOutcomeUnknownError(exc) from exc
+                    _raise_private_cause(ACPRequestOutcomeUnknownError(exc), exc)
                 raise
             finally:
                 primary_error = sys.exc_info()[1]
@@ -452,7 +452,7 @@ class CursorCLIClient:
                 try:
                     stderr_bytes = await stderr_task
                 except ACPProtocolError as exc:
-                    raise ACPProtocolError(str(exc), partial_output=_partial_output()) from exc
+                    _raise_private_cause(ACPProtocolError(str(exc), partial_output=_partial_output()), exc)
                 stderr = stderr_bytes.decode("utf-8", errors="replace").strip()
                 if process.returncode:
                     cause = ACPProviderError(
@@ -460,7 +460,7 @@ class CursorCLIClient:
                         details=stderr,
                         returncode=process.returncode,
                     )
-                    raise ACPPartialResponseError(cause, partial_output=_partial_output()) from cause
+                    _raise_private_cause(ACPPartialResponseError(cause, partial_output=_partial_output()), cause)
                 raise ACPProtocolError(
                     "Cursor CLI stream ended without a terminal result event",
                     partial_output=_partial_output(),
@@ -469,7 +469,7 @@ class CursorCLIClient:
                 raise
             except Exception as exc:
                 if process is not None:
-                    raise ACPRequestOutcomeUnknownError(exc, partial_output=_partial_output()) from exc
+                    _raise_private_cause(ACPRequestOutcomeUnknownError(exc, partial_output=_partial_output()), exc)
                 raise
             finally:
                 primary_error = sys.exc_info()[1]
@@ -591,7 +591,7 @@ class CursorCLIClient:
             stdin.write(prompt.encode("utf-8"))
             await wait_for_owned(stdin.drain(), remaining)
         except asyncio.TimeoutError as exc:
-            raise ACPPromptTimeoutError(self.config.timeout_prompt) from exc
+            _raise_private_cause(ACPPromptTimeoutError(self.config.timeout_prompt), exc)
         except (BrokenPipeError, ConnectionResetError) as exc:
             raise ConnectionError("Cursor CLI closed stdin before accepting the prompt") from exc
         finally:
@@ -639,7 +639,9 @@ class CursorCLIClient:
                     CURSOR_EXIT_DRAIN_TIMEOUT,
                 )
             except asyncio.TimeoutError as exc:
-                raise ACPProtocolError("Cursor CLI output pipes remained open after subprocess exit") from exc
+                _raise_private_cause(
+                    ACPProtocolError("Cursor CLI output pipes remained open after subprocess exit"), exc
+                )
             return stdout_bytes, stderr_bytes
         finally:
             # gather() does not cancel sibling awaitables when one reader
@@ -682,7 +684,7 @@ class CursorCLIClient:
             except asyncio.TimeoutError as exc:
                 self._start_late_spawn_cleanup(task)
                 if deadline - loop.time() <= 0:
-                    raise ACPPromptTimeoutError(self.config.timeout_prompt) from exc
+                    _raise_private_cause(ACPPromptTimeoutError(self.config.timeout_prompt), exc)
                 raise ConnectionError(f"Cursor CLI startup exceeded {self.config.timeout_connect:g}s") from exc
             except BaseException:
                 self._start_late_spawn_cleanup(task)

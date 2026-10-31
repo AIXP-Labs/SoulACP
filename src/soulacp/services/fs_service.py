@@ -196,15 +196,16 @@ class FSService:
             raise FileNotFoundError("Requested path is not a directory")
         files: list[str] = []
         scanned = 0
-        for entry in resolved.iterdir():
-            scanned += 1
-            if scanned > self.MAX_DIRECTORY_SCAN_ENTRIES:
-                raise ValueError(f"directory exceeds the {self.MAX_DIRECTORY_SCAN_ENTRIES}-entry scan limit")
-            if entry.name.startswith("."):
-                continue
-            files.append(entry.name)
-            if len(files) > self.MAX_DIRECTORY_ENTRIES:
-                raise ValueError(f"directory exceeds the {self.MAX_DIRECTORY_ENTRIES}-entry listing limit")
+        with os.scandir(resolved) as entries:
+            for entry in entries:
+                scanned += 1
+                if scanned > self.MAX_DIRECTORY_SCAN_ENTRIES:
+                    raise ValueError(f"directory exceeds the {self.MAX_DIRECTORY_SCAN_ENTRIES}-entry scan limit")
+                if entry.name.startswith("."):
+                    continue
+                files.append(entry.name)
+                if len(files) > self.MAX_DIRECTORY_ENTRIES:
+                    raise ValueError(f"directory exceeds the {self.MAX_DIRECTORY_ENTRIES}-entry listing limit")
         return sorted(files)
 
     async def exists(self, path: str, **_extra: Any) -> dict[str, Any]:

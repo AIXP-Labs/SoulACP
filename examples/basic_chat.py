@@ -1,4 +1,7 @@
-"""Basic chat example using ManagedSession."""
+"""ManagedSession example requiring an installed, authenticated provider CLI.
+
+Use synthetic input: stdout contains the original reply, not redacted diagnostics.
+"""
 
 import asyncio
 

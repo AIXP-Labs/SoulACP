@@ -6,6 +6,11 @@ Security fixes are applied to the latest released minor version and the
 current `main` branch. Users should reproduce reports against the newest
 available release before submitting them.
 
+The current checkout targets 0.2.1; a source version or changelog date is not a
+publication receipt. Identify the actual installed distribution and source or
+artifact revision in a report. Reproductions should use synthetic inputs rather
+than real credentials or private session data.
+
 ## Reporting a Vulnerability
 
 Report vulnerabilities through GitHub's private security advisory channel:
@@ -54,11 +59,24 @@ system sandbox. `FSService` resolves its own file operations under configured
 roots, but this is best-effort containment under stable filesystem topology,
 not race-resistant protection against concurrent symlink or reparse-point
 replacement. An agent or terminal subprocess runs with the permissions of the
-current OS account. SoulACP terminates the direct child it owns; use an OS job,
-container, or equivalent isolation when descendant-process cleanup must be
-guaranteed. `ACP_AUTO_APPROVE=true` automatically selects an allow option when
+current OS account. Native ACP disconnect also attempts descendant cleanup via
+a separate POSIX process group or a Windows descendant snapshot with parent-chain
+checks. Escaped groups, process/PID races, and access failures prevent a general
+whole-tree guarantee; sending a signal or logging an attempt does not prove
+that every process exited. TerminalService and legacy Cursor retain their own
+direct-child cleanup contracts. Use an OS job, container, or equivalent isolation
+when descendant-process cleanup must be guaranteed.
+An empty Windows descendant snapshot, including a snapshot taken after the
+CLI exited, must not be interpreted as proof that no tools remain alive.
+`ACP_AUTO_APPROVE=true` automatically selects an allow option when
 available; use `false` for untrusted workspaces and configure the provider
 CLI's own sandbox and permission policy.
+
+ACP permission-option selection is not an end user's business authorization.
+Cancelled prompt turns return cancelled permission outcomes, including for
+already-queued requests; duplicate option identifiers are rejected before selection.
+Applications must implement their own human decision gates; SoulACP does not
+infer consent from a prompt, a model response, or a successful permission RPC.
 
 Session cache files contain unencrypted provider session identifiers. Protect
 them with OS permissions and do not share them between trust domains.
@@ -94,6 +112,39 @@ library logs into sensitive provider diagnostics; never enable it in a broadly
 accessible or long-retention logging environment. Metric attributes use bounded
 keys and values, with unknown pool-dimension values collapsed to `other`.
 Metrics and spans never use this opt-in and remain content-free.
+RPC span cleanup passes no original exception to the telemetry context manager;
+only a bounded failure/cancellation category and error status are retained.
+File-cache persistence errors preserve the OSError category and errno but redact
+public filenames. Their explicit `cause` retains the original filesystem error
+and is sensitive, like other raw diagnostic objects.
+Response wrappers keep original diagnostic identity in `cause`, and fallback
+failures retain the earlier error in `primary_cause`. The default `__cause__`
+display chain contains a redacted summary instead of those original objects.
+This does not redact Python source-file locations or arbitrary caller-added
+notes; keep complete tracebacks private and review them before sharing.
+Partial output remains original response content; exception redaction does not
+turn `partial_output` into a safe-to-share diagnostic. A raw cause is retained
+for explicit private diagnosis, not implicitly forwarded to telemetry or logs.
+Protocol validation errors retain provider identifiers/values separately in
+`ACPProtocolError.details`; public error strings keep only safe reason text.
+Claude model-selection logs omit raw values by default and escape them when
+the existing sensitive-diagnostics opt-in is explicitly enabled.
+Configuration validation reports fields and constraints without echoing raw
+values; invalid numeric environment values suppress the original parse chain.
+Session-control rejection messages omit supplied option IDs and values. URL
+parse failures suppress the original parser chain, and strict JSON duplicate-key
+errors omit the key. Structured exception fields such as `capability` remain
+sensitive even when the public message uses a safe label.
+
+Redaction covers the library's documented diagnostic paths, not arbitrary
+application output or third-party CLI logging. Raw exception fields,
+`extra_env`, MCP headers, session/config objects, authentication files, and
+cache contents remain sensitive. Do not attach them to issues, commits,
+distributions, or public CI artifacts. Use synthetic inputs and reviewed,
+minimal reports; remove prompts, answers, identifiers, personal paths, tokens,
+cookies, and authorization headers before sharing. Never place secrets in
+command-line examples. An exact model or provider metadata field is not an
+independent attestation of the model that served a request.
 
 `ACP_OTEL_PROPAGATE=1` forwards only an active W3C `traceparent` and
 `tracestate` at subprocess startup. Baggage and custom propagation fields are
@@ -112,4 +163,4 @@ mitigation is available.
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.0. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.1. www.soulacp.dev

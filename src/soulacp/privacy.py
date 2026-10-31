@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Any
+from typing import Any, NoReturn, TypeVar
 
 SENSITIVE_LOG_ENV = "ACP_LOG_SENSITIVE_DATA"
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9_$./:-]{1,80}$")
+_ErrorT = TypeVar("_ErrorT", bound=BaseException)
 
 
 def sensitive_logging_enabled() -> bool:
@@ -57,3 +58,19 @@ def exception_summary(exc: BaseException, *, include_sensitive: bool | None = No
 def public_exception_summary(exc: BaseException) -> str:
     """Return an always-redacted exception summary for public error strings."""
     return exception_summary(exc, include_sensitive=False)
+
+
+def _bind_private_cause(error: _ErrorT, cause: BaseException, *, primary: bool = False) -> _ErrorT:
+    """Retain diagnostic identity outside Python's default exception display chain."""
+    error.__dict__["primary_cause" if primary else "cause"] = cause
+    displayed = Exception(public_exception_summary(cause))
+    displayed.__suppress_context__ = True
+    error.__cause__ = displayed
+    error.__suppress_context__ = True
+    return error
+
+
+def _raise_private_cause(error: BaseException, cause: BaseException, *, primary: bool = False) -> NoReturn:
+    """Raise through the safe chain while making exception-handling intent explicit."""
+    _bind_private_cause(error, cause, primary=primary)
+    raise error from error.__cause__

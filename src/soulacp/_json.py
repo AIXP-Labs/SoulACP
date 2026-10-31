@@ -14,7 +14,7 @@ def _reject_duplicate_object_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
-            raise ValueError(f"duplicate JSON object key is not allowed: {key!r}")
+            raise ValueError("duplicate JSON object key is not allowed")
         result[key] = value
     return result
 
