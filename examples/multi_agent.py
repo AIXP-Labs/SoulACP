@@ -2,6 +2,10 @@
 
 Requires separately installed/authenticated CLIs and available models. Run only
 with synthetic input; stdout contains original responses, not redacted diagnostics.
+Default permission settings can auto-approve agent requests. Read the Gemini
+authentication warning in README before running: a connection can change its
+native credential cache. This demo reviews only the first 500 characters and
+prints excerpts, not a complete audit or full original responses.
 """
 
 import asyncio

@@ -74,6 +74,12 @@ hooks, dependency audits and guarded builds must be reported separately.
 Provider integration tests require explicit authorization, installed CLIs and
 authentication; never enable them merely to remove default skips.
 
+For installed-package type completeness, activate the intended environment and
+ensure `PATH` and, for a virtual environment, `VIRTUAL_ENV` identify it. Check the
+package origin reported by the verifier. A `PYTHONPATH` override or invocation
+through another Python executable alone does not prove which package the Node
+verifier found; source and installed-package type checks are different evidence.
+
 ### Repository Hook Environment
 
 The runtime library and development tests still support Python 3.10. Repository
@@ -90,6 +96,13 @@ python3.11 -m venv .venv-hooks
 .venv-hooks/bin/python -m pre_commit run --all-files
 ```
 
+`--all-files` selects Git-tracked files, not new untracked files. After reviewing
+new inputs, run the same hooks explicitly on them as well; for example:
+
+```bash
+.venv-hooks/bin/python -m pre_commit run --files tests/test_fs_integrity_errors.py tests/test_owned_fs_shutdown.py
+```
+
 On Windows use `py -3.11 -m venv .venv-hooks` and
 `.venv-hooks\Scripts\python.exe` in place of the Unix interpreter path.
 Both `requirements-min.txt` and `requirements-hooks.txt` must pass dependency
@@ -103,7 +116,7 @@ and session-cache locations, but are not a substitute for reviewing staged files
 
 ### Release Identity and Privacy
 
-For the current **0.2.2** source target:
+For the current **0.2.3** source target:
 
 1. Check `pyproject.toml`, `src/soulacp/meta.py`, the root `soulacp` entry in
    `uv.lock`, current documentation footers, and the current changelog entry.
@@ -114,7 +127,7 @@ For the current **0.2.2** source target:
    for a subsequent build. `make clean` remains an explicitly destructive action:
 
    ```bash
-   python tools/build_release.py --outdir dist/0.2.2
+   python tools/build_release.py --outdir dist/0.2.3
    # Alternatively: make build DIST_DIR=dist/another-new-directory
    ```
 
@@ -138,6 +151,13 @@ For the current **0.2.2** source target:
    do not upload `dist/*` indiscriminately. Documentation examples do not themselves
    authorize publication. Share only reviewed, minimal release evidence, never
    credentials or raw private diagnostics.
+
+For documentation-only artifacts, list the exact changed inputs and separately
+verify archive privacy, metadata, source completeness and cold-install provenance.
+Runtime results may be inherited only when their runtime bytes, dependencies,
+tests, platform and parameters are unchanged; identify that component inheritance
+instead of claiming a new full-matrix run. New or changed documentation assertions
+need their own execution evidence. Never overwrite the previously tested artifacts.
 
 ### Bilingual Requirement
 
@@ -171,4 +191,4 @@ Copyright 2026 AIXP Labs AIXP.dev | SoulACP.dev
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.2. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.3. www.soulacp.dev

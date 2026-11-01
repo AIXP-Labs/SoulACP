@@ -70,12 +70,12 @@ async def test_fs_service_honors_acp_line_and_returns_empty_write_result(tmp_pat
 
     fs = FSService(str(tmp_path))
     target = tmp_path / "lines.txt"
-    target.write_text("one\ntwo\nthree\n", encoding="utf-8")
+    target.write_bytes(b"one\r\ntwo\r\nthree\r\n")
 
     result = await fs.read_text_file(path=str(target), line=2, limit=1)
     write_result = await fs.write_text_file(path=str(tmp_path / "written.txt"), content="value")
 
-    assert result == {"content": "two\n"}
+    assert result == {"content": "two\r\n"}
     assert write_result == {}
     assert (tmp_path / "written.txt").read_text(encoding="utf-8") == "value"
 
@@ -88,7 +88,7 @@ async def test_fs_write_finishes_physical_operation_before_propagating_cancellat
     started = threading.Event()
     release = threading.Event()
 
-    def blocked_write(_resolved, _content):
+    def blocked_write(_resolved, _content, _encoded):
         started.set()
         assert release.wait(timeout=5)
 
@@ -162,9 +162,9 @@ async def test_fs_service_accepts_acp_zero_line_and_limit_boundaries(tmp_path):
 
     fs = FSService(str(tmp_path))
     target = tmp_path / "lines.txt"
-    target.write_text("one\ntwo\n", encoding="utf-8")
+    target.write_bytes(b"one\r\ntwo\r\n")
 
-    assert await fs.read_text_file(path=str(target), line=0, limit=1) == {"content": "one\n"}
+    assert await fs.read_text_file(path=str(target), line=0, limit=1) == {"content": "one\r\n"}
     assert await fs.read_text_file(path=str(target), line=1, limit=0) == {"content": ""}
     assert await fs.read_text_file(path=str(target), line=2**32 - 1, limit=1) == {"content": ""}
 
@@ -216,23 +216,16 @@ def test_fs_service_enforces_limit_when_file_grows_after_open(monkeypatch, tmp_p
     target = tmp_path / "growing.txt"
     target.write_text("four", encoding="utf-8")
 
-    class ChangedFile:
-        def is_dir(self):
-            return False
-
-        def stat(self):
-            return SimpleNamespace(st_mode=target.stat().st_mode, st_size=0)
-
-        def open(self, *args, **kwargs):
-            return target.open(*args, **kwargs)
-
+    metadata = target.stat()
     monkeypatch.setattr(
         fs_service_module.os,
         "fstat",
-        lambda _fd: SimpleNamespace(st_mode=target.stat().st_mode, st_size=0),
+        lambda _fd: SimpleNamespace(
+            st_mode=metadata.st_mode, st_size=0, st_dev=metadata.st_dev, st_ino=metadata.st_ino
+        ),
     )
     with pytest.raises(ValueError, match="read limit"):
-        fs._read_resolved(ChangedFile(), 1, 1)
+        fs._read_resolved(target, 1, 1)
 
 
 def test_fs_service_rejects_non_regular_files_before_open(tmp_path):
@@ -244,7 +237,7 @@ def test_fs_service_rejects_non_regular_files_before_open(tmp_path):
         def is_dir(self):
             return False
 
-        def stat(self):
+        def lstat(self):
             return SimpleNamespace(st_mode=stat.S_IFIFO, st_size=0)
 
         def open(self, *args, **kwargs):

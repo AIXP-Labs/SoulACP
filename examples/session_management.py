@@ -2,6 +2,8 @@
 
 This does not guarantee survival of an original process or its child agents.
 Use synthetic inputs: printed response text is not a redacted diagnostic.
+Default permission settings can auto-approve agent requests. Logical user IDs do
+not isolate CLI credentials; review README authentication and OS-account boundaries.
 """
 
 import asyncio

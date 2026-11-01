@@ -70,6 +70,11 @@
 `make check`只覆盖lint、类型与Bandit，不是完整CI；测试、hook、依赖审计和受控构建
 须分别报告。Provider集成测试需要明确授权、已安装CLI和认证，不能只为消除默认skip而启用。
 
+检查已安装包的类型完整性时，应激活目标环境，确保`PATH`与虚拟环境的
+`VIRTUAL_ENV`指向该环境，并核对verifier报告的包来源。仅覆盖`PYTHONPATH`或
+从另一个Python解释器启动，不能证明Node verifier实际找到了哪份包；源码与安装态
+类型检查是不同证据。
+
 ### 独立仓库 Hook 环境
 
 运行库及开发测试仍支持 Python 3.10。仓库 hook 使用 Python 3.11 或更高版本，
@@ -85,6 +90,13 @@ python3.11 -m venv .venv-hooks
 .venv-hooks/bin/python -m pre_commit run --all-files
 ```
 
+`--all-files`选择Git已跟踪文件，不包含新增未跟踪文件。审查新输入后，还须对它们
+显式运行同一组hook，例如：
+
+```bash
+.venv-hooks/bin/python -m pre_commit run --files tests/test_fs_integrity_errors.py tests/test_owned_fs_shutdown.py
+```
+
 Windows 使用 `py -3.11 -m venv .venv-hooks` 创建环境，将上述解释器路径替换为
 `.venv-hooks\Scripts\python.exe`。`requirements-min.txt` 和 `requirements-hooks.txt`
 均须通过依赖审计；环境分离不豁免任一审计或 hook 检查。
@@ -96,7 +108,7 @@ Windows 使用 `py -3.11 -m venv .venv-hooks` 创建环境，将上述解释器�
 
 ### 发布身份与隐私
 
-当前源码目标为 **0.2.2**：
+当前源码目标为 **0.2.3**：
 
 1. 核对 `pyproject.toml`、`src/soulacp/meta.py`、`uv.lock` 中本项目条目、
    当前文档页脚和当前 CHANGELOG 条目。不要改写历史版本，也不要把日期当上传回执。
@@ -105,7 +117,7 @@ Windows 使用 `py -3.11 -m venv .venv-hooks` 创建环境，将上述解释器�
    `DIST_DIR`另选新目录。`make clean`仍是需显式选择的破坏性清理：
 
    ```bash
-   python tools/build_release.py --outdir dist/0.2.2
+   python tools/build_release.py --outdir dist/0.2.3
    # 或：make build DIST_DIR=dist/another-new-directory
    ```
 
@@ -121,6 +133,11 @@ Windows 使用 `py -3.11 -m venv .venv-hooks` 创建环境，将上述解释器�
    集成验收。下游依赖及 lock 独立核对，不静默升级或重启消费应用的活动 worker。
 7. 经维护者发布裁定后，仅上传明确选择的文件，不无差别上传 `dist/*`。文档示例
    本身不是发布授权；对外只提供审阅过的最小发布证据，不能包含凭据或原始私人诊断。
+
+仅文档变化的产物也须列出准确变更输入，重新核验归档隐私、元数据、源码完整性及
+冷安装来源。只有运行正文、依赖、测试、平台和参数均未变化的组件才可继承原运行
+结果；必须标明组件继承，不能冒称新产物又跑过全矩阵。新增或修改的文档断言须有
+独立执行证据，不能覆盖此前已验产物。
 
 ### 双语要求
 
@@ -150,4 +167,4 @@ Copyright 2026 AIXP Labs AIXP.dev | SoulACP.dev
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.2. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.3. www.soulacp.dev

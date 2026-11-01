@@ -901,7 +901,7 @@ async def test_server_request_concurrency_is_bounded(monkeypatch):
     )
 
     assert len(client._request_tasks) == 2
-    assert client.errors == [(3, -32000, "Too many concurrent ACP host requests")]
+    assert client.errors == [(3, 10004, "Too many concurrent ACP host requests")]
     client.request_gate.set()
     await asyncio.gather(*client._request_tasks)
 
@@ -932,7 +932,7 @@ async def test_terminal_wait_limit_preserves_capacity_for_control_requests(monke
 
     assert len(client._request_tasks) == 3
     assert client._terminal_wait_request_ids == {1, 2}
-    assert client.errors == [(3, -32000, "Too many concurrent terminal wait requests")]
+    assert client.errors == [(3, 10004, "Too many concurrent terminal wait requests")]
 
     client.request_gate.set()
     await asyncio.gather(*client._request_tasks)

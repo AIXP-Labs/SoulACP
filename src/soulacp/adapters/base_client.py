@@ -42,8 +42,13 @@ from soulacp.errors import (
     ACPUnsupportedCapabilityError,
 )
 from soulacp.privacy import _bind_private_cause, _raise_private_cause, exception_summary, sensitive_logging_enabled
-from soulacp.services.fs_service import FSService
-from soulacp.services.terminal_service import TerminalService
+from soulacp.services.fs_service import (
+    FSService,
+    HostResourceLimitError,
+    TextEncodingError,
+    UnsupportedTextResourceError,
+)
+from soulacp.services.terminal_service import TerminalNotFoundError, TerminalService
 from soulacp.telemetry import telemetry_provider_name
 
 from ._session_updates import validate_permission_tool_call, validate_stable_session_update
@@ -1998,29 +2003,33 @@ class ACPClientBase(ABC):
                 )
         self._reader_tasks.clear()
 
-        # Reader shutdown closes the window in which a late subprocess frame
-        # could schedule new host work while services are being torn down.
-        # A host-service failure must not prevent reaping the ACP parent.
+        # Reap the CLI before waiting for owned file workers. They may still
+        # need to finish, but cannot prevent transport termination.
+        termination_error: BaseException | None = None
+        try:
+            await self._reap_disconnected_transport(descendants)
+        except BaseException as exc:
+            termination_error = exc
         host_cleanup_error: BaseException | None = None
         try:
             await self._close_host_services()
         except BaseException as exc:
             host_cleanup_error = exc
+        if termination_error is not None:
+            if host_cleanup_error is not None:
+                logger.error("ACP host service cleanup also failed: %s", exception_summary(host_cleanup_error))
+            raise termination_error
+        if host_cleanup_error is not None:
+            raise host_cleanup_error
 
+    async def _reap_disconnected_transport(self, descendants: set[int]) -> None:
         proc = self.process
         spawn_cleanup_pending = (
             self._async_spawn_task is not None and self._async_spawn_cleanup_task is not asyncio.current_task()
         )
         if spawn_cleanup_pending:
-            if host_cleanup_error is not None:
-                logger.error(
-                    "ACP host service cleanup also failed: %s",
-                    exception_summary(host_cleanup_error),
-                )
             raise RuntimeError("ACP subprocess spawn cleanup is still pending")
         if proc is None:
-            if host_cleanup_error is not None:
-                raise host_cleanup_error
             return
 
         if proc.stdin and not proc.stdin.is_closing():
@@ -2064,16 +2073,9 @@ class ACPClientBase(ABC):
             except (asyncio.TimeoutError, ProcessLookupError, PermissionError, OSError) as exc:
                 termination_error = exc
         if proc.returncode is None:
-            if host_cleanup_error is not None:
-                logger.error(
-                    "ACP host service cleanup also failed: %s",
-                    exception_summary(host_cleanup_error),
-                )
             raise RuntimeError("ACP subprocess did not exit after terminate/kill") from termination_error
         if self.process is proc:
             self.process = None
-        if host_cleanup_error is not None:
-            raise host_cleanup_error
 
     async def _prepare_host_services(self) -> None:
         cleanup = self._host_cleanup_task
@@ -2842,10 +2844,10 @@ class ACPClientBase(ABC):
                 method == "terminal/wait_for_exit"
                 and len(self._terminal_wait_request_ids) >= MAX_TERMINAL_WAIT_REQUESTS
             ):
-                await self._send_error(request_id, -32000, "Too many concurrent terminal wait requests")
+                await self._send_error(request_id, 10004, "Too many concurrent terminal wait requests")
                 return
             if len(self._request_tasks) >= MAX_HOST_REQUEST_TASKS:
-                await self._send_error(request_id, -32000, "Too many concurrent ACP host requests")
+                await self._send_error(request_id, 10004, "Too many concurrent ACP host requests")
                 return
             if method == "session/request_permission":
                 self._permission_request_turns[request_id] = self._permission_turn
@@ -3254,10 +3256,22 @@ class ACPClientBase(ABC):
             if service_type == "fs":
                 result = await getattr(self._fs_service, action)(**params)
             elif service_type == "terminal":
+                if action != "create":
+                    names = [name for name in ("terminalId", "terminal_id") if name in params]
+                    if not names or any(not isinstance(params[name], str) for name in names):
+                        raise ValueError("terminal handle must be a string")
                 result = await getattr(self._terminal_service, action)(**params)
             else:
                 await self._send_host_error(mid, -32601, f"Unknown service: {service_type}")
                 return
+        except (HostResourceLimitError, TextEncodingError, UnsupportedTextResourceError) as exc:
+            if isinstance(exc, HostResourceLimitError):
+                code, message = 10001, "Host file resource limit exceeded"
+            elif isinstance(exc, TextEncodingError):
+                code, message = 10002, "Unsupported text encoding"
+            else:
+                code, message = 10003, "Unsupported text resource"
+            await self._send_host_error(mid, code, message)
         except (TypeError, ValueError) as exc:
             logger.debug(
                 "ACP host request rejected (%s/%s): %s",
@@ -3273,8 +3287,16 @@ class ACPClientBase(ABC):
                 action,
                 exception_summary(exc),
             )
-            if service_type == "fs" and action == "read_text_file" and isinstance(exc, FileNotFoundError):
+            if (service_type == "fs" and action == "read_text_file" and isinstance(exc, FileNotFoundError)) or (
+                service_type == "terminal" and isinstance(exc, TerminalNotFoundError)
+            ):
                 await self._send_host_error(mid, -32002, "Resource not found")
+            elif (
+                service_type == "fs"
+                and action in {"read_text_file", "write_text_file"}
+                and isinstance(exc, IsADirectoryError)
+            ):
+                await self._send_host_error(mid, 10003, "Unsupported text resource")
             else:
                 await self._send_host_error(mid, -32603, "Host service request failed")
         else:

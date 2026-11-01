@@ -15,6 +15,7 @@ English | [简体中文](README_CN.md)
 - [Quick Start](#quick-start)
 - [Supported Agents](#supported-agents)
 - [Usage](#usage)
+- [Authentication and Service Terms](#authentication-and-service-terms)
 - [Session Management](#session-management)
 - [Configuration](#configuration)
 - [Privacy Boundaries](#privacy-boundaries)
@@ -58,7 +59,8 @@ Use `python -m pip install soulacp` to select a Python interpreter explicitly.
 ### Current source
 
 You can also clone the GitHub repository and install from source locally.
-To install a particular release, check out its matching release tag first.
+For a particular release, verify that its tag exists; otherwise use the recorded
+source commit matched to its artifacts. A candidate version is not a publication receipt.
 
 ```bash
 git clone https://github.com/AIXP-Labs/SoulACP.git
@@ -78,7 +80,7 @@ Check the interpreter, distribution metadata, and imported module together:
 python -c "import importlib.metadata as m, soulacp; print(m.version('soulacp')); print(soulacp.__version__)"
 ```
 
-Both values should be `0.2.2` when validating this checkout. Locally inspect
+Both values should be `0.2.3` when validating this checkout. Locally inspect
 `soulacp.__file__` if the values differ; redact personal paths before sharing
 diagnostics. Editable installs, wheels, and downstream lock files are distinct
 installation sources. Replacing files does not reload an already-running worker.
@@ -104,10 +106,11 @@ diagnostics. Review the [permission boundaries](#configuration) before running.
 
 ```python
 import asyncio
-from soulacp import ManagedSession
+from soulacp import ACPConfig, ManagedSession
 
 async def main():
-    async with ManagedSession(provider="claude", model="claude-acp/sonnet") as session:
+    config = ACPConfig(auto_approve_permissions=False)
+    async with ManagedSession(provider="claude", model="claude-acp/sonnet", config=config) as session:
         # Simple query — session auto-managed
         response = await session.query("Hello!", user_id="user1")
         print(response)
@@ -133,7 +136,7 @@ import asyncio
 from soulacp import ACPConfig, ACPConnectionPool, resolve_client_class
 
 async def main():
-    config = ACPConfig(provider="claude", model="claude-acp/sonnet")
+    config = ACPConfig(provider="claude", model="claude-acp/sonnet", auto_approve_permissions=False)
     client_class = resolve_client_class("claude")
 
     async with ACPConnectionPool(config, client_class) as pool:
@@ -154,7 +157,7 @@ asyncio.run(main())
 | OpenClaw | `openclaw` | `openclaw/default` | `openclaw acp --no-prefix-cwd` |
 | Cursor (ACP) | `cursor` | `cursor-acp/default` | `cursor-agent acp` |
 | Cursor (Legacy) | `cursor-cli` | `cursor-cli/gpt-4` | `cursor-agent -p` |
-| Codex | `codex` | `codex-acp/gpt-5.5` | `codex-acp` |
+| Codex | `codex` | `codex-acp/default` | `codex-acp` |
 | Qwen Code | `qwen` | `qwen-acp/qwen-coder` | `qwen-code --acp --experimental-skills` |
 | Kimi CLI | `kimi` | `kimi-acp/default` | `kimi acp` |
 | Codebuddy Code | `codebuddy` | `codebuddy-acp/default` | `codebuddy-code --acp` |
@@ -178,6 +181,9 @@ asyncio.run(main())
 | pi ACP | `pi` | `pi-acp/default` | `pi-acp` |
 | Qoder | `qoder` | `qoder-acp/default` | `qodercli --acp` |
 | Stakpak | `stakpak` | `stakpak-acp/default` | `stakpak acp` |
+
+This table lists implemented integrations, not successful authenticated tests of
+every CLI, account, or model. Registry discovery is not runtime qualification.
 
 The base-command column is not an installation command. Adapters can append
 model, policy, or authentication arguments at launch. Model availability
@@ -206,7 +212,7 @@ npm install -g "@agentclientprotocol/claude-agent-acp@>=0.86.0" "@agentclientpro
 ```
 
 Keep the quotes so the shell does not treat `>` as a redirect. These ranges
-match SoulACP 0.2.2's installation hints; they are not exact version pins or
+match SoulACP 0.2.3's installation hints; they are not exact version pins or
 qualification of every later bridge/model combination. A bridge can bundle its
 own CLI/runtime, so upgrading a global `claude` or `codex` alone does not prove
 which runtime the bridge will use. Check the bridge's installed package metadata
@@ -244,6 +250,14 @@ asyncio.run(main())
 
 ### Gemini
 
+**Authentication warning:** The adapter requests `authMethods[0]` during connection.
+In Gemini CLI `0.51.0`, switching from its saved authentication method calls
+`clearCachedCredentialFile` before refresh succeeds. Review the
+[upstream implementation](https://raw.githubusercontent.com/google-gemini/gemini-cli/v0.51.0/packages/cli/src/acp/acpRpcDispatcher.ts),
+use a deliberately approved test identity, and do not assume a paid API login is
+automatically selected. Permission rejection does not prevent these native
+authentication side effects.
+
 ```python
 import asyncio
 from soulacp import ManagedSession
@@ -259,16 +273,25 @@ asyncio.run(main())
 ### Codex (OpenAI)
 
 Codex ACP supports an eligible ChatGPT subscription or API-key authentication.
-For local ChatGPT authentication, run `codex login` once; the Codex bridge then
-uses `~/.codex/auth.json` without requiring `OPENAI_API_KEY`.
+For local ChatGPT authentication, run `codex login` once; the bridge delegates
+credential reuse to its CLI. Depending on `CODEX_HOME` and
+`cli_auth_credentials_store`, credentials can live in a file or an OS credential
+store, rather than always in `~/.codex/auth.json`. See the
+[official authentication documentation](https://learn.chatgpt.com/docs/auth?surface=cli).
+ChatGPT login does not require `OPENAI_API_KEY`; never copy credentials into an issue.
+
+OpenAI retired `gpt-5.5` for Codex with ChatGPT sign-in on `2026-10-14`;
+API-key sessions are not affected. This example leaves model selection to the
+installed provider instead of choosing a replacement for the caller. Check
+[model availability](https://learn.chatgpt.com/docs/models) for the active account.
 
 ```python
 import asyncio
 from soulacp import ManagedSession
 
 async def main():
-    # Example model; availability depends on the account and bridge version
-    async with ManagedSession(provider="codex", model="codex-acp/gpt-5.5") as session:
+    # Leave model selection to the installed provider
+    async with ManagedSession(provider="codex", model="codex-acp/default") as session:
         response = await session.query("Hello!")
         print(response)
 
@@ -351,6 +374,27 @@ async def main():
 
 asyncio.run(main())
 ```
+
+## Authentication and Service Terms
+
+Provider login belongs to the CLI's OS account and profile. `user_id` routes a
+logical session; it does not create another credential identity or tenant
+sandbox. An unencrypted `FileCache` is not an identity vault. Use separate,
+reviewed trust domains for mutually untrusted users.
+
+Native CLI authentication can update settings or caches before a model prompt.
+Neither `auto_approve_permissions=False` nor logical session separation prevents
+those writes. A connection can trigger `authenticate()`; review the Gemini warning
+before running either its standalone or multiple-provider example. Examples
+without an explicit permission policy use the configured environment and defaults.
+
+Personal local use, each user's own login, and centrally hosted or pooled usage
+have different identity and service-term requirements. A key or subscription
+does not itself authorize sharing or resale. Review the current
+[Claude Code legal guidance](https://code.claude.com/docs/en/legal-and-compliance)
+and [Gemini CLI authentication](https://geminicli.com/docs/get-started/authentication/).
+SoulACP is not a credential-collection service or a compliance guarantee;
+supplied and inherited credentials remain sensitive application data.
 
 ## Session Management
 
@@ -793,13 +837,36 @@ to EOF when `limit` is omitted, provided the selected text fits the unchanged
 Successful reads never insert truncation markers or return a partial requested
 line. Explicit line limits remain bounded to 10,000. Missing files return ACP
 resource-not-found (`-32002`); containment and other host failures are not
-reclassified as missing files. Read cancellation waits for the owned worker.
+reclassified as missing files. Legal resource failures use implementation codes
+`10001` (file budget), `10002` (text encoding), `10003` (text resource), and `10004`
+(host request concurrency); invalid parameters retain `-32602`. Missing terminal
+handles also use `-32002`; these implementation codes are not ACP standard codes.
+Read cancellation waits for the owned worker.
 When cancellation coincides with a read/write worker failure, the original
 worker exception remains in the cancelled exception's explicit `cause` field;
 the default display chain contains only a redacted summary.
 Python 3.10 may wrap this cancellation at an outer asyncio Task boundary; the
 original cancellation remains in that outer exception's context.
-Requests are
+
+Since 0.2.3, UTF-8 decoding is strict and reads/writes preserve original LF, CRLF,
+CR and BOM without replacement characters or platform newline conversion. CRLF
+counts as two Python characters: 3334 repetitions of `a\r\n` now exceed the
+10000-character budget instead of becoming 6668 normalized characters. Invalid
+UTF-8 reads fail with private diagnostics; explicit valid writes do not preread
+the old content. A zero-line request does not decode content but still validates
+the path, type and file budget. Buffer prefetch may encounter invalid bytes beyond
+the selected logical lines; unread tails are not certified. Gemini consumers that
+preread whole files can still reject edits exceeding this budget. Their ACP SDK
+error normalization may also prevent new-file creation; a correct missing code
+alone is not proof of that consumer's behavior. There is no automatic native-tool fallback.
+
+Writes accept regular files only, validate the opened descriptor before truncating,
+and finish short writes. Pre-write validation failures leave the target unchanged;
+an I/O failure after writing begins may leave partial content. Writes are not atomic
+replacements and do not promise crash durability. Disconnect stops the CLI before
+waiting for owned file operations, but cannot interrupt permanently blocked kernel
+I/O or guarantee that all descendants exited. Metadata/list cancellation is not
+changed into an uninterruptible write-style wait. Requests are
 contained to `cwd` plus validated `additional_directories` and bound file, text,
 write, and directory sizes. Reads accept regular files only and enforce the byte
 limit on the opened stream, including files that grow after path validation.
@@ -882,13 +949,9 @@ and no equivalent explicit flag is supplied. This existing behavior is unchanged
 use explicit rejection configuration or the native ACP adapter as appropriate.
 Minimal environment settings do not isolate the account's on-disk CLI login.
 
-Authentication and service terms are provider-specific. An API key alone does
-not establish permission to pool or resell usage; do not use one person's
-subscription credentials to serve other users without the provider's authority.
-Each deployment must review its identities and credential ownership against the
-provider's current rules, including [Claude Code legal guidance](https://code.claude.com/docs/en/legal-and-compliance)
-and [Gemini CLI authentication](https://geminicli.com/docs/get-started/authentication/).
-SoulACP does not collect end-user credentials or provide a compliance guarantee.
+The [authentication and service-term boundaries](#authentication-and-service-terms)
+also apply to cached CLI identities. Redacted diagnostics do not prove that a
+native authentication operation left credential files unchanged.
 
 Legacy Cursor CLI prompts are sent through stdin, not argv. Cursor's documented
 resume interface still requires the session ID in `--resume`, and explicit
@@ -918,13 +981,14 @@ whether external side effects occurred:
 ManagedSession (high-level API)
   ├── ProviderSessionStore (user→session mapping)
   │   └── CacheBackend (MemoryCache / FileCache)
-  ├── ACPConnectionPool (bounded reuse + FIFO backpressure + lifecycle)
-  │   └── ACPClientBase (JSON-RPC over stdio subprocess)
-  │       ├── 29 ACP adapter implementations (see Supported Agents)
-  │       └── CursorCLIClient (legacy non-ACP integration)
-  └── Services
-      ├── FSService (file system operations)
-      └── TerminalService (no-shell argv execution, live bounded output, kill/release)
+  └── ACPConnectionPool (bounded reuse + FIFO backpressure + lifecycle)
+      └── ACPClient (client protocol)
+          ├── ACPClientBase (native JSON-RPC over stdio subprocess)
+          │   ├── 29 ACP adapter implementations (see Supported Agents)
+          │   └── Services (owned by the physical native client)
+          │       ├── FSService (file system operations)
+          │       └── TerminalService (no-shell argv execution, bounded output, kill/release)
+          └── CursorCLIClient (independent legacy non-ACP integration)
 ```
 
 ## Testing
@@ -950,10 +1014,10 @@ python -m pyright
 PYTHONPATH=src python -m pyright --verifytypes soulacp --ignoreexternal
 python -m bandit -q -r src/soulacp
 
-# Build into a new, empty output directory; do not mix historical releases
-python tools/build_release.py --outdir dist/0.2.2
-python -m twine check dist/0.2.2/soulacp-0.2.2-py3-none-any.whl dist/0.2.2/soulacp-0.2.2.tar.gz
-python tools/check_sdist.py dist/0.2.2/soulacp-0.2.2.tar.gz
+# Build into a new, nonexistent output directory; do not mix historical releases
+python tools/build_release.py --outdir dist/0.2.3
+python -m twine check dist/0.2.3/soulacp-0.2.3-py3-none-any.whl dist/0.2.3/soulacp-0.2.3.tar.gz
+python tools/check_sdist.py dist/0.2.3/soulacp-0.2.3.tar.gz
 ```
 
 Repository hooks use the separate Python >=3.11
@@ -1026,7 +1090,7 @@ This software is **experimental** and provided for **research and educational pu
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.2. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.3. www.soulacp.dev
 
 <a id="alignment-philosophy"></a>
 

@@ -69,7 +69,7 @@ async def drain(client):
 async def test_read_many_short_lines_returns_exact_requested_content(tmp_path, limit):
     text = "x\n" * 2500 + "TAIL\n"
     path = tmp_path / "many.txt"
-    path.write_text(text, encoding="utf-8")
+    path.write_bytes(text.encode("utf-8"))
     assert await FSService(str(tmp_path)).read_text_file(str(path), limit=limit) == {"content": text}
 
 
@@ -78,7 +78,7 @@ async def test_oversized_read_fails_without_publishing_partial_content(tmp_path,
     fs = FSService(str(tmp_path))
     text = "x" * (fs.MAX_READ_CHARS + 1)
     path = tmp_path / "long.txt"
-    path.write_text(text, encoding="utf-8")
+    path.write_bytes(text.encode("utf-8"))
     with pytest.raises(ValueError, match="read limit") as caught:
         await fs.read_text_file(str(path), limit=limit)
     assert str(path) not in str(caught.value)
@@ -89,19 +89,19 @@ async def test_oversized_read_fails_without_publishing_partial_content(tmp_path,
 async def test_explicit_read_slice_and_roundtrip_preserve_tail(tmp_path):
     path = tmp_path / "roundtrip.txt"
     text = "x\n" * 2100 + "TAIL\n"
-    path.write_text(text, encoding="utf-8")
+    path.write_bytes(text.encode("utf-8"))
     fs = FSService(str(tmp_path))
     assert await fs.read_text_file(str(path), line=2101, limit=1) == {"content": "TAIL\n"}
     original = (await fs.read_text_file(str(path)))["content"]
     await fs.write_text_file(str(path), original.replace("x\n", "y\n", 1))
-    assert path.read_text(encoding="utf-8") == text.replace("x\n", "y\n", 1)
+    assert path.read_bytes() == text.replace("x\n", "y\n", 1).encode("utf-8")
 
 
 async def test_read_escaped_text_stays_exact_and_bounded(tmp_path):
     fs = FSService(str(tmp_path))
     text = '"\\\t\x01\u4e2d\n' * 100
     path = tmp_path / "escaped.txt"
-    path.write_text(text, encoding="utf-8")
+    path.write_bytes(text.encode("utf-8"))
     result = await fs.read_text_file(str(path))
     assert result == {"content": text}
     assert len(json.dumps(result).encode()) <= 6 * fs.MAX_READ_CHARS + 32
@@ -113,7 +113,7 @@ async def test_read_limits_remain_fixed_and_slices_of_large_text_are_legal(tmp_p
     assert fs.MAX_FILE_BYTES == 10 * 1_048_576
     assert fs.MAX_LINE_LIMIT == 10_000
     path = tmp_path / "slices.txt"
-    path.write_text("a" * 6000 + "\n" + "b" * 6000 + "\n", encoding="utf-8")
+    path.write_bytes(("a" * 6000 + "\n" + "b" * 6000 + "\n").encode("utf-8"))
     assert (await fs.read_text_file(str(path), line=1, limit=1))["content"] == "a" * 6000 + "\n"
     assert (await fs.read_text_file(str(path), line=2, limit=1))["content"] == "b" * 6000 + "\n"
     with pytest.raises(ValueError, match="read limit"):
@@ -281,7 +281,7 @@ async def test_buffered_stream_content_does_not_extend_permission_window(tmp_pat
 
 @pytest.mark.parametrize(
     "kind,expected",
-    [(PermissionError, -32603), (IsADirectoryError, -32603), (RuntimeError, -32603), (ValueError, -32602)],
+    [(PermissionError, -32603), (IsADirectoryError, 10003), (RuntimeError, -32603), (ValueError, -32602)],
 )
 async def test_read_failures_are_not_misclassified_or_leaked(tmp_path, caplog, kind, expected):
     client = BoundaryClient(tmp_path)
@@ -363,7 +363,7 @@ class StdioClient(GeminiACPClient):
 async def test_real_stdio_file_and_permission_roundtrip(tmp_path, stream, auto_approve):
     text = "x\n" * 2500 + "TAIL\n"
     path = tmp_path / "source.txt"
-    path.write_text(text, encoding="utf-8")
+    path.write_bytes(text.encode("utf-8"))
     client = StdioClient(
         ACPConfig(
             cwd=str(tmp_path),

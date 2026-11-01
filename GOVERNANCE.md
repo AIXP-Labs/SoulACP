@@ -94,7 +94,7 @@ SoulACP follows Semantic Versioning:
 Pre-1.0 releases may refine APIs more quickly, but breaking changes still
 require explicit changelog and migration guidance.
 
-The current source target is **0.2.2**. A patch must preserve the documented
+The current source target is **0.2.3**. A patch must preserve the documented
 public API and safety policy. Source metadata, installed metadata, import
 location, distribution contents, and downstream lock files are separate
 identities to verify. Historical changelog entries retain their own versions;
@@ -111,6 +111,19 @@ than preserving the original object's identity. This documented change does not
 authorize additional compatibility breaks or unsafe prompt replay. Older
 changelog entries describe their historical versions, not today's defaults.
 
+### 0.2.3 Text and Error Migration
+
+The accepted 0.2.3 correction uses strict UTF-8 and original LF/CRLF/CR rather
+than replacement decoding or platform newline conversion. CRLF consumes two
+characters, so some previously normalized ranges now exceed the unchanged budget
+and fail safely. Writes no longer translate line endings. Resource concurrency
+uses implementation code `10004`, not authentication code `-32000`; applications
+must not classify every old server error as retryable or as missing content.
+These documented corrections do not authorize budget expansion or a new
+authentication-selection policy. Authentication changes need a separate caller
+control and compatibility review; documentation warnings are not an implementation
+or evidence that a CLI's credentials were never changed.
+
 ## Axiom 0
 
 Human Sovereignty and Wellbeing is the project's immutable guiding constraint.
@@ -119,4 +132,4 @@ testable safety and compatibility contracts described above.
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.2. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.3. www.soulacp.dev

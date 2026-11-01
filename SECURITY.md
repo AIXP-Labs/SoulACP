@@ -6,7 +6,7 @@ Security fixes are applied to the latest released minor version and the
 current `main` branch. Users should reproduce reports against the newest
 available release before submitting them.
 
-The current checkout targets 0.2.2; a source version or changelog date is not a
+The current checkout targets 0.2.3; a source version or changelog date is not a
 publication receipt. Identify the actual installed distribution and source or
 artifact revision in a report. Reproductions should use synthetic inputs rather
 than real credentials or private session data.
@@ -90,6 +90,22 @@ are separate from permission-option selection. The built-in services do not
 provide a per-path human approval list for sensitive configuration files.
 Applications needing that policy must enforce it through their host/provider
 integration and OS isolation; do not treat this flag as filesystem read-only mode.
+
+Native authentication is another side-effect boundary: permission-option rejection
+does not prevent CLI login from changing settings or cached credentials. The Gemini
+adapter requests the first advertised method; Gemini CLI 0.51.0 can call
+`clearCachedCredentialFile` before a changed-method refresh succeeds. Review the
+[documented warning](README.md#gemini) before connecting; do not diagnose a failed
+authentication code as proof of expired credentials or harmless initialization.
+
+Since 0.2.3, text requests use strict UTF-8 and preserve LF/CRLF/CR and BOM within
+the unchanged budgets. A rejected invalid encoding or expanded raw-newline range
+is not permission to retry through an unmediated tool. Ordinary-file descriptors
+are checked before truncation, but filesystem races are not fully eliminated.
+Validation rejection leaves an existing target unchanged; I/O failure after a
+write starts can leave partial content. Writes are not atomic or crash-durable.
+Owned file operations finish before cancellation propagates; permanently blocked
+kernel I/O has no guaranteed Python-thread cancellation deadline.
 
 Session cache files contain unencrypted provider session identifiers. Protect
 them with OS permissions and do not share them between trust domains.
@@ -180,4 +196,4 @@ mitigation is available.
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.2. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.3. www.soulacp.dev

@@ -15,6 +15,7 @@
 - [快速开始](#快速开始)
 - [支持的 Agent](#支持的-agent)
 - [使用示例](#使用示例)
+- [认证与服务条款](#认证与服务条款)
 - [Session 管理](#session-管理)
 - [配置](#配置)
 - [隐私边界](#隐私边界)
@@ -58,7 +59,8 @@ GitHub 与 PyPI 使用相同版本号同步发布。
 ### 当前源码
 
 也可以克隆 GitHub 仓库并在本地从源码安装。
-如需安装某个发布版本，应先检出对应的发布标签。
+如需安装某个发布版本，应先核实标签确实存在；否则使用与产物对应的已记录源码提交。
+候选版本号不代表已发布。
 
 ```bash
 git clone https://github.com/AIXP-Labs/SoulACP.git
@@ -78,7 +80,7 @@ python -m pip install -e ".[dev]"
 python -c "import importlib.metadata as m, soulacp; print(m.version('soulacp')); print(soulacp.__version__)"
 ```
 
-验收本 checkout 时两者应为 `0.2.2`。若不一致，可在本机检查
+验收本 checkout 时两者应为 `0.2.3`。若不一致，可在本机检查
 `soulacp.__file__`，分享诊断前须脱敏个人路径。Editable 安装、wheel 和下游
 锁文件是不同的安装来源；替换磁盘文件不会重载已经运行的 worker。
 
@@ -102,10 +104,11 @@ python -m pip install -e ".[otel]"
 
 ```python
 import asyncio
-from soulacp import ManagedSession
+from soulacp import ACPConfig, ManagedSession
 
 async def main():
-    async with ManagedSession(provider="claude", model="claude-acp/sonnet") as session:
+    config = ACPConfig(auto_approve_permissions=False)
+    async with ManagedSession(provider="claude", model="claude-acp/sonnet", config=config) as session:
         # 简单查询 — session 自动管理
         response = await session.query("Hello!", user_id="user1")
         print(response)
@@ -131,7 +134,7 @@ import asyncio
 from soulacp import ACPConfig, ACPConnectionPool, resolve_client_class
 
 async def main():
-    config = ACPConfig(provider="claude", model="claude-acp/sonnet")
+    config = ACPConfig(provider="claude", model="claude-acp/sonnet", auto_approve_permissions=False)
     client_class = resolve_client_class("claude")
 
     async with ACPConnectionPool(config, client_class) as pool:
@@ -152,7 +155,7 @@ asyncio.run(main())
 | OpenClaw | `openclaw` | `openclaw/default` | `openclaw acp --no-prefix-cwd` |
 | Cursor (ACP) | `cursor` | `cursor-acp/default` | `cursor-agent acp` |
 | Cursor (Legacy) | `cursor-cli` | `cursor-cli/gpt-4` | `cursor-agent -p` |
-| Codex | `codex` | `codex-acp/gpt-5.5` | `codex-acp` |
+| Codex | `codex` | `codex-acp/default` | `codex-acp` |
 | Qwen Code | `qwen` | `qwen-acp/qwen-coder` | `qwen-code --acp --experimental-skills` |
 | Kimi CLI | `kimi` | `kimi-acp/default` | `kimi acp` |
 | Codebuddy Code | `codebuddy` | `codebuddy-acp/default` | `codebuddy-code --acp` |
@@ -176,6 +179,9 @@ asyncio.run(main())
 | pi ACP | `pi` | `pi-acp/default` | `pi-acp` |
 | Qoder | `qoder` | `qoder-acp/default` | `qodercli --acp` |
 | Stakpak | `stakpak` | `stakpak-acp/default` | `stakpak acp` |
+
+该表表示已实现的集成，不代表每个CLI、账户和模型均已通过真实认证验收。
+注册表发现不等于运行资格证明。
 
 “基础命令”列不是安装命令。Adapter 启动时可能追加模型、策略或认证参数；
 可用模型取决于已安装的 CLI、账户和认证方式。
@@ -202,7 +208,7 @@ print("Installed:", installed)
 npm install -g "@agentclientprotocol/claude-agent-acp@>=0.86.0" "@agentclientprotocol/codex-acp@>=2.1.1"
 ```
 
-版本范围须保留引号，避免 shell 把 `>` 当作重定向。这些范围与 SoulACP 0.2.2
+版本范围须保留引号，避免 shell 把 `>` 当作重定向。这些范围与 SoulACP 0.2.3
 的安装提示一致，不是精确锁版，也不代表所有后续 bridge/模型组合均已验收。
 Bridge 可能自带 CLI/runtime，因此只升级全局 `claude` 或 `codex` 不能证明
 bridge 实际使用了哪个 runtime。应核对已安装 bridge 的包元数据和其报告的
@@ -239,6 +245,13 @@ asyncio.run(main())
 
 ### Gemini
 
+**认证警示：**适配器在连接时请求`authMethods[0]`。Gemini CLI `0.51.0`
+若从已保存的认证方式切换到另一种方式，会在刷新成功之前调用
+`clearCachedCredentialFile`。请先审阅
+[上游实现](https://raw.githubusercontent.com/google-gemini/gemini-cli/v0.51.0/packages/cli/src/acp/acpRpcDispatcher.ts)，
+使用经明确批准的测试身份，不要假定会自动采用已有付费API登录。
+拒绝权限选项不会阻止这些原生认证副作用。
+
 ```python
 import asyncio
 from soulacp import ManagedSession
@@ -253,17 +266,24 @@ asyncio.run(main())
 
 ### Codex (OpenAI)
 
-Codex ACP 支持符合条件的 ChatGPT 订阅或 API key 认证。本机使用 ChatGPT 认证时，
-先执行一次 `codex login`；Codex bridge 随后使用 `~/.codex/auth.json`，
-不要求设置 `OPENAI_API_KEY`。
+Codex ACP支持符合条件的ChatGPT订阅或API key认证。本机使用ChatGPT认证时，
+先执行一次`codex login`，bridge随后委托其CLI复用凭据。根据`CODEX_HOME`与
+`cli_auth_credentials_store`设置，凭据可能保存在文件或OS凭据存储中，
+不一定是`~/.codex/auth.json`。详见
+[官方认证文档](https://learn.chatgpt.com/docs/auth?surface=cli)。
+ChatGPT登录不要求设置`OPENAI_API_KEY`；不要把凭据复制到issue。
+
+OpenAI已于`2026-10-14`停止在ChatGPT登录的Codex中提供`gpt-5.5`，
+API key会话不受该变更影响。本例由已安装provider选择模型，不替调用方指定替代模型。
+请核对当前账户的[模型可用性](https://learn.chatgpt.com/docs/models)。
 
 ```python
 import asyncio
 from soulacp import ManagedSession
 
 async def main():
-    # 示例模型；可用性取决于账户和 bridge 版本
-    async with ManagedSession(provider="codex", model="codex-acp/gpt-5.5") as session:
+    # 由已安装的provider选择模型
+    async with ManagedSession(provider="codex", model="codex-acp/default") as session:
         response = await session.query("Hello!")
         print(response)
 
@@ -339,6 +359,23 @@ async def main():
 
 asyncio.run(main())
 ```
+
+## 认证与服务条款
+
+Provider登录属于CLI所在的OS账号及profile。`user_id`只路由逻辑会话，
+不会创建独立凭据身份或租户沙箱；未加密的`FileCache`也不是身份保险库。
+对彼此不可信的用户，应使用独立且经审查的信任域。
+
+原生CLI认证可能在模型prompt之前更新设置或缓存。
+`auto_approve_permissions=False`与逻辑会话隔离都不会阻止这些写入；
+连接可能触发`authenticate()`。运行Gemini单独示例或多provider示例之前，
+应先阅读其认证警示。未显式提供权限策略的示例使用配置环境及默认值。
+
+个人本机使用、每位用户各自登录，以及集中托管或汇聚用量的身份与服务条款要求不同。
+持有key或订阅本身不表示可以共享或转售。须审查当前
+[Claude Code法律说明](https://code.claude.com/docs/en/legal-and-compliance)及
+[Gemini CLI认证](https://geminicli.com/docs/get-started/authentication/)。
+SoulACP不是凭据收集服务，也不提供合规保证；显式提供或继承的凭据仍是敏感应用数据。
 
 ## Session 管理
 
@@ -533,6 +570,12 @@ session load/resume 在 Agent 未声明 `loadSession` 或
 才首次到达的迟到请求不一定能归属到原回合。活动回合的allow/reject策略不变；
 这不是人类业务授权门。
 
+`auto_approve_permissions=False`只为经由
+`session/request_permission`的请求选择拒绝选项，不是对`fs/*`或`terminal/*`
+宿主服务的全局禁止开关。这些服务执行自身的配置根、schema和资源检查，不提供
+针对敏感配置文件的逐路径人类授权清单。需要更强限制的应用必须通过自己的
+host/provider策略和OS隔离落实。
+
 `pool_size` 不是并发上限。物理容量由每个 pool 实例自己的
 `pool_max_connections` 约束。每个 `ManagedSession` 实例按 `provider:model` key
 各建一个 pool，因此单个实例使用 N 个 key 时最多可保留 N 倍的单池上限；
@@ -552,12 +595,6 @@ session-affinity cache 的作用。同一个指定 session ID 同一时刻只允
 配置错误只报告字段和约束，不回显原始输入；非法数值环境变量会抑制原始解析异常链。
 会话控制拒绝消息省略用户提供的ID和值；URL解析异常链及严格JSON重复键错误不暴露输入文本。
 包括`capability`在内的原始结构化异常字段仍须按敏感信息处理。
-
-`auto_approve_permissions=False`只为经由
-`session/request_permission`的请求选择拒绝选项，不是对`fs/*`或`terminal/*`
-宿主服务的全局禁止开关。这些服务执行自身的配置根、schema和资源检查，不提供
-针对敏感配置文件的逐路径人类授权清单。需要更强限制的应用必须通过自己的
-host/provider策略和OS隔离落实。
 
 ### Provider 专用环境变量
 
@@ -723,10 +760,27 @@ ACP 文件系统请求遵循 v1 的绝对 `path`；schema 边界 `line=0` 映射
 `limit=0` 返回零行。未提供`limit`时读取至EOF，但所选文本必须满足未改变的
 10,000字符和10 MiB文件上限，否则明确失败。成功读取不会插入截断标记，
 也不会返回所请求行的片段。显式行数上限仍为10,000。文件不存在返回ACP资源缺失
-（`-32002`）；越根和其它宿主失败不会被改称为文件不存在。读取取消会等待所属
+（`-32002`）；越根和其它宿主失败不会被改称为文件不存在。合法资源失败使用实现码
+`10001`（文件预算）、`10002`（文本编码）、`10003`（文本资源）和`10004`
+（宿主请求并发）；非法参数仍为`-32602`。终端句柄不存在也使用`-32002`；
+这些实现码不是ACP标准码。读取取消会等待所属
 工作线程完成。取消与读/写工作线程失败同时发生时，原始工作线程异常保留在取消异常
 显式的`cause`字段中；默认展示链只包含脱敏摘要。Python 3.10可能在外层asyncio Task
-边界包装取消异常，原取消异常仍保留在外层异常的context中。请求只能位于 `cwd` 或校验后的
+边界包装取消异常，原取消异常仍保留在外层异常的context中。
+
+自0.2.3起，UTF-8严格解码，读写保留原始LF、CRLF、CR和BOM，不替换坏字节，
+也不自动转换平台换行。CRLF计为两个Python字符：3334个`a\r\n`现在超过
+10000字符预算，不再归一化为6668字符。非法UTF-8读取拒绝且原始诊断保持私有；
+显式合法写入不预读旧正文。零行请求不解码正文，但仍校验路径、类型和文件预算。
+缓冲预读可能触及所选逻辑行之后的非法字节；未读尾部不声称已验证。Gemini等整文件
+预读消费者仍可能拒绝超额编辑；其ACP SDK错误归类也可能阻止新建文件，不能只凭
+正确的缺失码证明消费者行为。没有自动原生工具fallback。
+
+写入只接受普通文件，截断前核验已打开的描述符，并完成短写。写入前校验拒绝不改动
+已有目标；开始真实写入后的I/O失败可能留下部分内容。不是原子替换，也不承诺崩溃
+持久性。断开时先停止CLI，再等待所属文件操作；不能中断永久阻塞的内核I/O，
+也不保证全部后代退出。目录/元数据查询不会改成写入式的不可中断取消等待。
+请求只能位于 `cwd` 或校验后的
 `additional_directories`，并限制文件、文本、写入和目录条目大小。读取仅接受普通文件，
 且针对已打开的数据流执行字节上限，即使文件在路径校验后增长也不会绕过。路径约束仍是
 文件系统拓扑稳定时的 best-effort 机制，不提供抗 symlink 竞态保护，也不是操作系统级
@@ -789,12 +843,8 @@ session ID、个人路径和身份信息。不要附上 `.env`、provider 认证
 这一既有行为不变；应按需要显式配置拒绝或使用原生ACP适配器。
 最小环境设置不会隔离当前账户保存在磁盘上的CLI登录。
 
-认证与服务条款因Provider而异。API key本身不证明可以共享或转售用量；
-未经Provider允许，不应以一个人的订阅凭据服务其他用户。
-每个部署须按Provider现行规则审查身份与凭据归属，包括
-[Claude Code法律说明](https://code.claude.com/docs/en/legal-and-compliance)和
-[Gemini CLI认证](https://geminicli.com/docs/get-started/authentication/)。
-SoulACP不收集终端用户凭据，也不提供合规保证。
+[认证与服务条款边界](#认证与服务条款)同样适用于缓存的CLI身份。
+诊断经过脱敏，不证明原生认证操作未改变凭据文件。
 
 旧版 Cursor CLI prompt 已通过 stdin 发送，不再进入 argv；但 Cursor 文档化的 resume
 接口仍要求 session ID 出现在 `--resume` 中，显式 `OPENCLAW_SESSION_KEY` 同样属于
@@ -821,13 +871,14 @@ SoulACP agent 子进程以当前 OS 账户运行，并默认继承父进程环�
 ManagedSession（高级 API）
   ├── ProviderSessionStore（user→session 映射）
   │   └── CacheBackend（MemoryCache / FileCache）
-  ├── ACPConnectionPool（有界复用 + FIFO 背压 + 生命周期）
-  │   └── ACPClientBase（JSON-RPC over stdio 子进程）
-  │       ├── 29 个 ACP adapter 实现（见“支持的 Agent”）
-  │       └── CursorCLIClient（旧版非 ACP 集成）
-  └── Services
-      ├── FSService（文件系统操作）
-      └── TerminalService（无 shell 参数化执行、实时有界输出、kill/release）
+  └── ACPConnectionPool（有界复用 + FIFO 背压 + 生命周期）
+      └── ACPClient（client协议）
+          ├── ACPClientBase（原生JSON-RPC over stdio子进程）
+          │   ├── 29 个 ACP adapter 实现（见“支持的 Agent”）
+          │   └── Services（由物理原生client拥有）
+          │       ├── FSService（文件系统操作）
+          │       └── TerminalService（无shell参数化执行、有界输出、kill/release）
+          └── CursorCLIClient（独立的旧版非ACP集成）
 ```
 
 ## 测试
@@ -853,10 +904,10 @@ python -m pyright
 PYTHONPATH=src python -m pyright --verifytypes soulacp --ignoreexternal
 python -m bandit -q -r src/soulacp
 
-# 在全新空目录构建，不与历史发布混用
-python tools/build_release.py --outdir dist/0.2.2
-python -m twine check dist/0.2.2/soulacp-0.2.2-py3-none-any.whl dist/0.2.2/soulacp-0.2.2.tar.gz
-python tools/check_sdist.py dist/0.2.2/soulacp-0.2.2.tar.gz
+# 在全新且不存在的目录构建，不与历史发布混用
+python tools/build_release.py --outdir dist/0.2.3
+python -m twine check dist/0.2.3/soulacp-0.2.3-py3-none-any.whl dist/0.2.3/soulacp-0.2.3.tar.gz
+python tools/check_sdist.py dist/0.2.3/soulacp-0.2.3.tar.gz
 ```
 
 仓库hook使用独立Python >=3.11的[hook环境](CONTRIBUTING_CN.md#独立仓库-hook-环境)。
@@ -925,7 +976,7 @@ AIXP Labs 开发并维护以下核心项目：
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.2. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.3. www.soulacp.dev
 
 <a id="values-philosophy"></a>
 

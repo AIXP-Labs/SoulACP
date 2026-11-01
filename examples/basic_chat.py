@@ -1,6 +1,8 @@
 """ManagedSession example requiring an installed, authenticated provider CLI.
 
 Use synthetic input: stdout contains the original reply, not redacted diagnostics.
+Default permission settings can auto-approve agent requests. Review authentication
+and OS-account boundaries in README before running; this is not a read-only demo.
 """
 
 import asyncio

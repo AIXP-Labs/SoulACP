@@ -230,7 +230,7 @@ class OpenCodeACPClient(ACPClientBase):
                     return
                 self._popen = proc
                 try:
-                    await asyncio.to_thread(self._terminate_popen_sync, proc)
+                    await self._terminate_popen(proc)
                 except BaseException as exc:
                     # Keep the handle on the client. A pool-owned disconnect
                     # retry can then reap it instead of losing ownership in a
@@ -270,7 +270,7 @@ class OpenCodeACPClient(ACPClientBase):
         self._spawn_task = None
         self._spawn_abandoned = None
         if abandoned.is_set():
-            await asyncio.to_thread(self._terminate_popen_sync, proc)
+            await self._terminate_popen(proc)
             raise ConnectionError("OpenCode startup was cancelled before process ownership transferred")
 
         # No await between the cancellation check and assignment: disconnect()
@@ -305,6 +305,25 @@ class OpenCodeACPClient(ACPClientBase):
                 termination_error = exc
         if proc.poll() is None:
             raise RuntimeError("OpenCode subprocess did not exit after terminate/kill") from termination_error
+
+    async def _terminate_popen(self, proc: subprocess.Popen) -> None:
+        failure: BaseException | None = None
+        for stop, timeout in ((proc.terminate, 5.0), (proc.kill, 3.0)):
+            if proc.poll() is not None:
+                break
+            try:
+                stop()
+            except (ProcessLookupError, PermissionError, OSError) as exc:
+                failure = exc
+                continue
+            deadline = time.monotonic() + timeout
+            while proc.poll() is None and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+        if proc.poll() is None:
+            raise RuntimeError("OpenCode subprocess did not exit after terminate/kill") from failure
+        # Buffered pipe closing may block; only resource finalization uses the
+        # executor, after physical exit is already observed independently.
+        await asyncio.to_thread(self._terminate_popen_sync, proc)
 
     async def _initialize(self) -> None:
         """Perform OpenCode protocol handshake and create a session."""
@@ -635,12 +654,6 @@ class OpenCodeACPClient(ACPClientBase):
             if not future.done():
                 future.set_exception(ConnectionError("OpenCode disconnected"))
 
-        host_cleanup_error: BaseException | None = None
-        try:
-            await self._close_host_services()
-        except BaseException as exc:
-            host_cleanup_error = exc
-
         termination_error: BaseException | None = None
         spawn_cleanup_pending = self._spawn_task is not None or (
             self._spawn_cleanup_task is not None and self._spawn_cleanup_task is not asyncio.current_task()
@@ -650,12 +663,18 @@ class OpenCodeACPClient(ACPClientBase):
             termination_error = RuntimeError("OpenCode subprocess spawn cleanup is still pending")
         elif proc is not None:
             try:
-                await asyncio.to_thread(self._terminate_popen_sync, proc)
+                await self._terminate_popen(proc)
             except BaseException as exc:
                 termination_error = exc
             else:
                 if self._popen is proc:
                     self._popen = None
+
+        host_cleanup_error: BaseException | None = None
+        try:
+            await self._close_host_services()
+        except BaseException as exc:
+            host_cleanup_error = exc
 
         write_tasks = set(self._write_tasks)
         if write_tasks:

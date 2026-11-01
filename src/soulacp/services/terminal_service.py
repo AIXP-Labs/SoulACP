@@ -29,6 +29,10 @@ CAPTURE_JOIN_TIMEOUT = 1.0
 logger: logging.Logger = logging.getLogger(__name__)
 
 
+class TerminalNotFoundError(KeyError):
+    """A terminal handle is absent from this service, not an internal lookup bug."""
+
+
 @dataclass(slots=True)
 class _Terminal:
     process: asyncio.subprocess.Process
@@ -415,7 +419,7 @@ class TerminalService:
 
     def _get_terminal(self, terminal_id: str | None) -> _Terminal:
         if not terminal_id or terminal_id not in self._terminals:
-            raise KeyError("Terminal not found")
+            raise TerminalNotFoundError("Terminal not found")
         return self._terminals[terminal_id]
 
     def _resolve_cwd(self, requested: str | None) -> str:

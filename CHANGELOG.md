@@ -5,9 +5,56 @@ All notable changes to soulacp are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+Entries preserve their recorded source scope. Historical candidate/deployment
+statements describe the state when those notes were written, not the present
+publication status; use exact source/artifact release receipts for that status.
+
 ## [Unreleased]
 
 No changes yet.
+
+## [0.2.3] - Unreleased
+
+This is an unreleased source candidate, not a deployment or publication receipt.
+
+#### Fixed
+- Reject nonregular text targets before destructive opens; verify opened file
+  identity, use exclusive creation, complete short writes, and retain file-worker
+  ownership through cancellation. Physical CLI termination no longer waits behind
+  owned file I/O; OpenCode termination control does not depend on the file executor.
+- Strictly decode UTF-8, retain BOM and raw LF/CRLF/CR, and avoid fetching an extra
+  logical line after a requested slice. Zero-line reads validate resource premises
+  without decoding content. Original encoding failures remain private diagnostics.
+- Keep the 10,000 returned-character limit: CRLF now counts as two characters, so
+  formerly normalized boundary ranges can safely fail. Windows writes no longer
+  expand LF to CRLF or existing CRLF to CRCRLF. These are intentional contract
+  corrections, not a claim of identical return values for every old read.
+- Distinguish resource/encoding/type/concurrency failures with implementation
+  codes 10001-10004. Keep -32000 for authentication and use -32002 for confirmed
+  missing terminal handles as well as missing-file reads. Parameter errors,
+  containment failures and internal lookup bugs remain distinct and redacted.
+
+#### Boundaries
+- No budget expansion, new permission policy, automatic native-tool fallback,
+  atomic replacement, new executor framework, or public result API.
+- Permanently blocked kernel I/O cannot be killed in a Python worker. Metadata
+  query cancellation is unchanged. Post-start I/O failures may leave partial files.
+- Whole-file consumers remain limited by the read budget; upstream error
+  normalization can also limit new-file creation. Consumer qualification is
+  recorded separately from SDK correctness and physical stdio tests.
+
+#### Documentation
+- Add a dedicated bilingual authentication/terms entry before multiuser session
+  examples; distinguish logical user routing, OS identity, credentials and consent.
+- Warn that Gemini's advertised-first authentication can trigger native credential
+  cache side effects. Do not claim real Gemini qualification or change auth policy.
+- Clarify Codex credential-store choices and account-specific model availability;
+  use provider-owned default model selection in the introductory Codex example.
+- Correct the independent legacy Cursor architecture, native-client service
+  ownership, bilingual paragraph ordering, and current build-output version.
+- Document explicit hook coverage for untracked files, verifier import provenance,
+  documentation-component inheritance, and default-permission risks in examples.
+  Keep earlier version entries, execution behavior and existing safety gates.
 
 ## [0.2.2] - 2026-10-31
 

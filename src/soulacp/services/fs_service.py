@@ -7,7 +7,7 @@ import io
 import os
 import stat
 from collections.abc import Callable, Sequence
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, BinaryIO, TypeVar
 
 from soulacp.privacy import _raise_private_cause
@@ -15,6 +15,60 @@ from soulacp.privacy import _raise_private_cause
 from .path_utils import resolve_path
 
 _T = TypeVar("_T")
+
+
+class HostResourceLimitError(ValueError):
+    """A valid operation exceeds a bounded host resource budget."""
+
+
+class TextEncodingError(ValueError):
+    """File bytes cannot be decoded as UTF-8; raw diagnostics stay private."""
+
+
+class UnsupportedTextResourceError(ValueError):
+    """A text request names a nonregular resource."""
+
+
+def _reject_windows_device(path: str) -> None:
+    if os.name != "nt" or not isinstance(path, str):
+        return
+    for part in PureWindowsPath(path).parts:
+        name = part.split(":", 1)[0].split(".", 1)[0].rstrip(" ").upper()
+        if name in {"CON", "PRN", "AUX", "NUL"} or (
+            len(name) == 4 and name[:3] in {"COM", "LPT"} and name[3] in "123456789\u00b9\u00b2\u00b3"
+        ):
+            raise UnsupportedTextResourceError("Requested path is not a regular text file")
+
+
+def _open_regular(resolved: Path, *, writing: bool) -> int:
+    try:
+        before = resolved.lstat()
+    except FileNotFoundError:
+        if not writing:
+            raise
+        before = None
+    if before is not None:
+        if stat.S_ISDIR(before.st_mode):
+            raise IsADirectoryError("Requested path is not a text file")
+        if not stat.S_ISREG(before.st_mode):
+            raise UnsupportedTextResourceError("Requested path is not a regular text file")
+    flags = os.O_WRONLY if writing else os.O_RDONLY
+    flags |= getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NOCTTY", 0)
+    if before is None:
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        flags |= os.O_CREAT | os.O_EXCL
+    fd = os.open(resolved, flags, 0o666)
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode):
+            raise UnsupportedTextResourceError("Requested path is not a regular text file")
+        if before is not None and (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino):
+            raise OSError("Text file changed during safe open")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
 
 
 class _BoundedRawReader(io.RawIOBase):
@@ -37,7 +91,7 @@ class _BoundedRawReader(io.RawIOBase):
         if not chunk:
             return 0
         if len(chunk) > remaining:
-            raise ValueError(f"file exceeds the {self._limit}-byte read limit")
+            raise HostResourceLimitError(f"file exceeds the {self._limit}-byte read limit")
         buffer[: len(chunk)] = chunk
         self._consumed += len(chunk)
         return len(chunk)
@@ -116,38 +170,77 @@ class FSService:
         if line_limit is not None and line_limit > self.MAX_LINE_LIMIT:
             raise ValueError(f"limit must be <= {self.MAX_LINE_LIMIT}")
 
-        resolved = resolve_path(path, self.cwd, self.additional_directories)
-        return await _await_owned_thread(self._read_resolved, resolved, start_line, line_limit)
+        return await _await_owned_thread(
+            self._read_path,
+            path,
+            self.cwd,
+            self.additional_directories,
+            start_line,
+            line_limit,
+            self.MAX_READ_CHARS,
+            self.MAX_FILE_BYTES,
+        )
 
-    def _read_resolved(self, resolved: Path, start_line: int, line_limit: int | None) -> dict[str, Any]:
-        metadata = resolved.stat()
-        if stat.S_ISDIR(metadata.st_mode):
-            raise IsADirectoryError("Requested path is not a text file")
-        if not stat.S_ISREG(metadata.st_mode):
-            raise ValueError("Requested path is not a regular text file")
+    def _read_path(
+        self,
+        path: str,
+        cwd: str,
+        roots: tuple[str, ...],
+        start_line: int,
+        line_limit: int | None,
+        char_budget: int,
+        byte_budget: int,
+    ) -> dict[str, Any]:
+        _reject_windows_device(path)
+        resolved = resolve_path(path, cwd, roots)
+        return self._read_resolved(resolved, start_line, line_limit, char_budget, byte_budget)
 
-        with resolved.open("rb", buffering=0) as raw_handle:
+    def _read_resolved(
+        self,
+        resolved: Path,
+        start_line: int,
+        line_limit: int | None,
+        char_budget: int | None = None,
+        byte_budget: int | None = None,
+    ) -> dict[str, Any]:
+        char_budget = self.MAX_READ_CHARS if char_budget is None else char_budget
+        byte_budget = self.MAX_FILE_BYTES if byte_budget is None else byte_budget
+        fd = _open_regular(resolved, writing=False)
+        try:
+            raw_handle = os.fdopen(fd, "rb", buffering=0)
+        except BaseException:
+            os.close(fd)
+            raise
+        with raw_handle:
             opened_metadata = os.fstat(raw_handle.fileno())
-            if not stat.S_ISREG(opened_metadata.st_mode):
-                raise ValueError("Requested path is not a regular text file")
-            if opened_metadata.st_size > self.MAX_FILE_BYTES:
-                raise ValueError(f"file exceeds the {self.MAX_FILE_BYTES}-byte read limit")
+            if opened_metadata.st_size > byte_budget:
+                raise HostResourceLimitError(f"file exceeds the {byte_budget}-byte read limit")
+            if line_limit == 0:
+                return {"content": ""}
 
             selected: list[str] = []
             selected_chars = 0
-            bounded_raw = _BoundedRawReader(raw_handle, self.MAX_FILE_BYTES)
-            with io.TextIOWrapper(
-                io.BufferedReader(bounded_raw), encoding="utf-8", errors="replace", newline=None
-            ) as handle:
-                for line_number, text in enumerate(handle, start=1):
-                    if line_number < start_line:
-                        continue
-                    if line_limit is not None and len(selected) >= line_limit:
-                        break
-                    if selected_chars + len(text) > self.MAX_READ_CHARS:
-                        raise ValueError(f"content exceeds the {self.MAX_READ_CHARS}-character read limit")
-                    selected.append(text)
-                    selected_chars += len(text)
+            bounded_raw = _BoundedRawReader(raw_handle, byte_budget)
+            try:
+                with io.TextIOWrapper(
+                    io.BufferedReader(bounded_raw), encoding="utf-8", errors="strict", newline=""
+                ) as handle:
+                    iterator = iter(handle)
+                    line_number = 0
+                    while line_limit is None or len(selected) < line_limit:
+                        try:
+                            text = next(iterator)
+                        except StopIteration:
+                            break
+                        line_number += 1
+                        if line_number < start_line:
+                            continue
+                        if selected_chars + len(text) > char_budget:
+                            raise HostResourceLimitError(f"content exceeds the {char_budget}-character read limit")
+                        selected.append(text)
+                        selected_chars += len(text)
+            except UnicodeDecodeError as exc:
+                _raise_private_cause(TextEncodingError("Unsupported text encoding"), exc)
 
         content = "".join(selected)
         return {"content": content}
@@ -161,20 +254,36 @@ class FSService:
         """Write content and return the empty ACP v1 success result."""
         if not isinstance(content, str):
             raise ValueError("content must be a string")
+        if len(content) > self.MAX_WRITE_BYTES:
+            raise HostResourceLimitError(f"content exceeds the {self.MAX_WRITE_BYTES}-byte write limit")
         try:
-            encoded_size = len(content.encode("utf-8"))
+            encoded = content.encode("utf-8")
         except UnicodeEncodeError as exc:
-            raise ValueError("content must contain valid Unicode") from exc
-        if len(content) > self.MAX_WRITE_BYTES or encoded_size > self.MAX_WRITE_BYTES:
-            raise ValueError(f"content exceeds the {self.MAX_WRITE_BYTES}-byte write limit")
-        resolved = resolve_path(path, self.cwd, self.additional_directories)
-        await _await_owned_thread(self._write_resolved, resolved, content)
+            _raise_private_cause(ValueError("content must contain valid Unicode"), exc)
+        if len(encoded) > self.MAX_WRITE_BYTES:
+            raise HostResourceLimitError(f"content exceeds the {self.MAX_WRITE_BYTES}-byte write limit")
+        await _await_owned_thread(self._write_path, path, self.cwd, self.additional_directories, content, encoded)
         return {}
 
+    def _write_path(self, path: str, cwd: str, roots: tuple[str, ...], content: str, encoded: bytes) -> None:
+        _reject_windows_device(path)
+        resolved = resolve_path(path, cwd, roots)
+        self._write_resolved(resolved, content, encoded)
+
     @staticmethod
-    def _write_resolved(resolved: Path, content: str) -> None:
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-        resolved.write_text(content, encoding="utf-8")
+    def _write_resolved(resolved: Path, content: str, encoded: bytes | None = None) -> None:
+        data = content.encode("utf-8") if encoded is None else encoded
+        fd = _open_regular(resolved, writing=True)
+        try:
+            os.ftruncate(fd, 0)
+            remaining = memoryview(data)
+            while remaining:
+                written = os.write(fd, remaining)
+                if written <= 0:
+                    raise OSError("Text write made no progress")
+                remaining = remaining[written:]
+        finally:
+            os.close(fd)
 
     async def list_directory(
         self,

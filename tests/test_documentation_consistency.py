@@ -40,8 +40,8 @@ QUALITY_COMMANDS = (
     "python -m pytest tests/ -W error -v --cov=soulacp --cov-branch --cov-report=term",
     "python -m ruff check src/soulacp/ tests/ examples/ tools/",
     "python -m ruff format --check src/soulacp/ tests/ examples/ tools/",
-    "python tools/build_release.py --outdir dist/0.2.2",
-    "python tools/check_sdist.py dist/0.2.2/soulacp-0.2.2.tar.gz",
+    "python tools/build_release.py --outdir dist/0.2.3",
+    "python tools/check_sdist.py dist/0.2.3/soulacp-0.2.3.tar.gz",
 )
 
 
@@ -365,3 +365,106 @@ def test_documented_programmatic_config_constructs_without_launching_provider(pa
     assert config.provider == "claude" and config.pool_max_connections == 8
     assert config.auto_approve_permissions is True
     assert config.additional_directories == ["/absolute/path/to/shared"]
+
+
+def paragraph_technical_sections(document):
+    without_fences = re.sub(r"(?ms)^```[^\n]*\n.*?^```", "", document)
+    headings = list(re.finditer(r"(?m)^(#{1,6}) .+$", without_fences))
+    result = []
+    for index, heading in enumerate(headings):
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(without_fences)
+        body = without_fences[heading.end() : end].strip()
+        paragraphs = re.split(r"\n\s*\n", body) if body else []
+        result.append([Counter(re.findall(r"(?<!`)`([^`\r\n]+)`(?!`)", paragraph)) for paragraph in paragraphs])
+    return result
+
+
+def test_bilingual_technical_paragraph_order_matches():
+    en, cn = [path.read_text(encoding="utf-8") for path in READMES]
+    assert paragraph_technical_sections(en) == paragraph_technical_sections(cn)
+
+
+def test_paragraph_alignment_detects_swapped_scope_without_aggregate_drift():
+    first = "# Sample\n\n## Policy\n\nKeep `first` private.\n\nKeep `second` bounded.\n"
+    second = "# 示例\n\n## 策略\n\n限制`second`。\n\n保护`first`。\n"
+    assert technical_sections(first) == technical_sections(second)
+    assert paragraph_technical_sections(first) != paragraph_technical_sections(second)
+
+
+@pytest.mark.parametrize(
+    "path,heading,fragment",
+    [
+        (READMES[0], "## Authentication and Service Terms", "#authentication-and-service-terms"),
+        (READMES[1], "## 认证与服务条款", "#认证与服务条款"),
+    ],
+    ids=["README.md", "README_CN.md"],
+)
+def test_authentication_ownership_has_a_dedicated_entry_before_multiuser_examples(path, heading, fragment):
+    document = path.read_text(encoding="utf-8")
+    body = section(document, heading)
+    assert f"]({fragment})" in document
+    assert document.index(heading) < document.index("### ManagedSession + ProviderSessionStore")
+    for token in ("`user_id`", "`FileCache`", "`auto_approve_permissions=False`", "`authenticate()`"):
+        assert token in body
+
+
+@pytest.mark.parametrize("path", READMES, ids=lambda path: path.name)
+def test_gemini_warning_precedes_the_live_example(path):
+    body = section(path.read_text(encoding="utf-8"), "### Gemini")
+    assert body.index("`clearCachedCredentialFile`") < body.index("```python")
+    assert "`authMethods[0]`" in body
+    assert "0.51.0" in body
+
+
+@pytest.mark.parametrize("path", READMES, ids=lambda path: path.name)
+def test_codex_example_uses_provider_default_and_explains_credential_storage(path):
+    body = section(path.read_text(encoding="utf-8"), "### Codex (OpenAI)")
+    assert 'ManagedSession(provider="codex", model="codex-acp/default")' in body
+    assert "`CODEX_HOME`" in body and "`cli_auth_credentials_store`" in body
+    assert "https://learn.chatgpt.com/docs/auth?surface=cli" in body
+    assert "https://learn.chatgpt.com/docs/models" in body
+    assert "2026-10-14" in body
+
+
+@pytest.mark.parametrize("path", READMES, ids=lambda path: path.name)
+def test_architecture_keeps_legacy_cursor_outside_native_acp_base(path):
+    text = path.read_text(encoding="utf-8")
+    graph = re.findall(r"(?ms)^```text\n(.*?)^```", text)[0]
+    native = next(line for line in graph.splitlines() if "ACPClientBase" in line)
+    legacy = next(line for line in graph.splitlines() if "CursorCLIClient" in line)
+    protocol = next(line for line in graph.splitlines() if re.search(r"\bACPClient\b", line))
+    services = next(line for line in graph.splitlines() if "Services" in line)
+    assert native.index("ACPClientBase") == legacy.index("CursorCLIClient")
+    assert native.index("ACPClientBase") > protocol.index("ACPClient")
+    assert services.index("Services") > native.index("ACPClientBase")
+
+
+def test_makefile_build_directory_tracks_current_source_version():
+    assert f"DIST_DIR ?= dist/{soulacp.__version__}\n" in (ROOT / "Makefile").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("name", ["CONTRIBUTING.md", "CONTRIBUTING_CN.md"])
+def test_contribution_guides_include_untracked_hooks_and_verifier_origin(name):
+    document = (ROOT / name).read_text(encoding="utf-8")
+    assert "pre_commit run --files tests/test_fs_integrity_errors.py tests/test_owned_fs_shutdown.py" in document
+    assert "`VIRTUAL_ENV`" in document and "`PATH`" in document
+
+
+def test_bilingual_contribution_commands_match():
+    en, cn = [(ROOT / name).read_text(encoding="utf-8") for name in ("CONTRIBUTING.md", "CONTRIBUTING_CN.md")]
+    assert executable_examples(en) == executable_examples(cn)
+
+
+def test_security_and_governance_document_current_migration_boundaries():
+    security = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+    assert "`clearCachedCredentialFile`" in security
+    assert "UTF-8" in security and "CRLF" in security
+    governance = (ROOT / "GOVERNANCE.md").read_text(encoding="utf-8")
+    assert "`10004`" in governance and "`-32000`" in governance
+    assert "CRLF" in governance and "UTF-8" in governance
+
+
+@pytest.mark.parametrize("name", ["basic_chat.py", "streaming.py", "session_management.py", "multi_agent.py"])
+def test_example_documentation_warns_about_default_permissions(name):
+    document = ast.get_docstring(ast.parse((ROOT / "examples" / name).read_text(encoding="utf-8")))
+    assert document and "permission" in document.lower() and "default" in document.lower()
