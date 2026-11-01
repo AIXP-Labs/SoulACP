@@ -96,7 +96,7 @@ Windows 使用 `py -3.11 -m venv .venv-hooks` 创建环境，将上述解释器�
 
 ### 发布身份与隐私
 
-当前源码目标为 **0.2.1**：
+当前源码目标为 **0.2.2**：
 
 1. 核对 `pyproject.toml`、`src/soulacp/meta.py`、`uv.lock` 中本项目条目、
    当前文档页脚和当前 CHANGELOG 条目。不要改写历史版本，也不要把日期当上传回执。
@@ -105,7 +105,7 @@ Windows 使用 `py -3.11 -m venv .venv-hooks` 创建环境，将上述解释器�
    `DIST_DIR`另选新目录。`make clean`仍是需显式选择的破坏性清理：
 
    ```bash
-   python tools/build_release.py --outdir dist/0.2.1
+   python tools/build_release.py --outdir dist/0.2.2
    # 或：make build DIST_DIR=dist/another-new-directory
    ```
 
@@ -133,6 +133,11 @@ README 和 CONTRIBUTING 同时维护英文和中文版本。Issue 可使用任�
 `python -m pytest tests/test_documentation_consistency.py -W error -q`。
 外部来源主张单独复核；本地链接检查不能证明远端页面或模型可用。旧CHANGELOG条目保留历史。
 
+配置示例须区分`ACPConfig()`与`ACPConfig.from_env()`，不得暗示自动加载`.env`。
+权限示例须区分`session/request_permission`选项选择和`fs/*`、`terminal/*`服务
+策略。Python文件中的纯文档改动须比较去掉文档字符串后的执行AST，并保留运行
+回归；文字或链接检查通过不能独自证明行为未变。
+
 ## 行为准则
 
 参与本项目即表示您同意遵守 [Code of Conduct](CODE_OF_CONDUCT.md)。
@@ -145,4 +150,4 @@ Copyright 2026 AIXP Labs AIXP.dev | SoulACP.dev
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.1. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.2. www.soulacp.dev

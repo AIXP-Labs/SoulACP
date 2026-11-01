@@ -2405,6 +2405,7 @@ def test_shared_rpc_lifecycle_validates_stable_response_metadata(method, result)
 )
 async def test_permission_selection_uses_acp_option_kind(auto_approve: bool, expected_option: str):
     client = CaptureRequestClient(make_config(auto_approve_permissions=auto_approve))
+    client._begin_permission_turn()
     await client._handle_request(
         {
             "jsonrpc": "2.0",
@@ -2429,6 +2430,7 @@ async def test_permission_selection_uses_acp_option_kind(auto_approve: bool, exp
 @pytest.mark.asyncio
 async def test_legacy_permission_ids_fail_closed_when_auto_approve_is_disabled():
     client = CaptureRequestClient(make_config(auto_approve_permissions=False))
+    client._begin_permission_turn()
 
     await client._handle_request(
         {
@@ -2446,6 +2448,7 @@ async def test_legacy_permission_ids_fail_closed_when_auto_approve_is_disabled()
 @pytest.mark.asyncio
 async def test_legacy_permission_ids_remain_supported_when_auto_approve_is_enabled():
     client = CaptureRequestClient(make_config(auto_approve_permissions=True))
+    client._begin_permission_turn()
 
     await client._handle_request(
         {

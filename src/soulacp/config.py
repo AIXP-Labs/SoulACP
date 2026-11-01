@@ -437,15 +437,20 @@ FALLBACK_MAP: dict[str, str] = {
 class ACPConfig:
     """Configuration for an ACP CLI subprocess connection.
 
-    Scalar runtime settings can be overridden via environment variables with
-    the ``ACP_`` prefix (e.g. ``ACP_POOL_SIZE=5``).
+    ``ACPConfig()`` uses explicit arguments and dataclass defaults.
+    ``ACPConfig.from_env()`` reads process variables with the ``ACP_`` prefix
+    (e.g. ``ACP_POOL_SIZE=5``); explicit keyword overrides take precedence.
+    Neither constructor loads ``.env`` files.
     """
 
     provider: str = "claude"
     """Provider name — see README for full list. 30 providers including cursor-cli (legacy)."""
 
     model: str = "claude-acp/sonnet"
-    """Full model identifier used by ModelRegistry."""
+    """Namespaced model identifier forwarded to the selected provider adapter.
+
+    It requests model selection, not independent attestation of the model used.
+    """
 
     pool_size: int = 5
     """Maximum number of idle connections kept in the pool."""
@@ -508,7 +513,10 @@ class ACPConfig:
     """
 
     auto_approve_permissions: bool = True
-    """Automatically approve permission requests from the CLI."""
+    """Select allow or reject options for ACP permission requests.
+
+    This is not a global host-service deny switch or human business authorization.
+    """
 
     enable_fallback: bool = False
     """Allow configured fallback before prompt execution, not after unknown outcomes."""
@@ -535,10 +543,11 @@ class ACPConfig:
       - Codex reasoning effort:
           extra_args=["-c", 'model_reasoning_effort="high"']
       - Codex sandbox policy:
-          extra_args=["-c", 'sandbox_permissions=["disk-full-read-access"]']
+          extra_args=["-c", 'sandbox_mode="workspace-write"']
       - Any other ``-c key=value`` overrides supported by the target CLI.
 
-    Empty list = no extra args (default).
+    Empty list = no extra args (default). Effective sandbox and approval policy
+    belong to the installed runtime; arguments do not establish human consent.
     """
 
     extra_env: dict[str, str] = field(default_factory=dict, repr=False)

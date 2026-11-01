@@ -107,10 +107,13 @@ async def test_fs_write_finishes_physical_operation_before_propagating_cancellat
 
 @pytest.mark.asyncio
 async def test_fs_owned_thread_retrieves_worker_failure_when_cancellation_wins_race(monkeypatch):
+    import traceback
+
     from soulacp.services import fs_service as fs_service_module
 
     original_shield = asyncio.shield
     first_wait = True
+    write_error = OSError("synthetic private worker diagnostic")
 
     async def cancellation_after_worker_finishes(task):
         nonlocal first_wait
@@ -122,14 +125,17 @@ async def test_fs_owned_thread_retrieves_worker_failure_when_cancellation_wins_r
         return await original_shield(task)
 
     def fail_write():
-        raise OSError("disk write failed")
+        raise write_error
 
     monkeypatch.setattr(fs_service_module.asyncio, "shield", cancellation_after_worker_finishes)
 
     with pytest.raises(asyncio.CancelledError) as caught:
         await fs_service_module._await_owned_thread(fail_write)
 
-    assert isinstance(caught.value.__cause__, OSError)
+    assert isinstance(getattr(caught.value, "cause", None), OSError)
+    assert caught.value.cause is write_error
+    assert caught.value.__cause__ is not write_error
+    assert "synthetic private worker diagnostic" not in "".join(traceback.format_exception(caught.value))
 
 
 @pytest.mark.asyncio

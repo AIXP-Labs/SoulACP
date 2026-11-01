@@ -242,6 +242,7 @@ class _SessionStateSnapshot:
 @dataclass(slots=True)
 class _PermissionTurnState:
     cancelled: bool = False
+    active: bool = False
 
 
 def _encode_json_line(payload: dict[str, Any]) -> bytes:
@@ -874,7 +875,8 @@ class ACPClientBase(ABC):
         self.agent_info = None
         self.auth_methods = []
         self._clear_session_state()
-        self._begin_permission_turn()
+        self._permission_turn.active = False
+        self._permission_turn = _PermissionTurnState()
         self._session_transition_id = None
         self._session_transition_active = False
         self._pool_reusable = True
@@ -890,7 +892,8 @@ class ACPClientBase(ABC):
 
     def _begin_permission_turn(self) -> None:
         # Queued requests retain the old object's cancellation state.
-        self._permission_turn = _PermissionTurnState()
+        self._permission_turn.active = False
+        self._permission_turn = _PermissionTurnState(active=True)
 
     def _snapshot_session_state(self) -> _SessionStateSnapshot:
         return _SessionStateSnapshot(
@@ -1098,6 +1101,7 @@ class ACPClientBase(ABC):
         if not session_id:
             raise RuntimeError("No active ACP session")
         self._begin_permission_turn()
+        permission_turn = self._permission_turn
         self._chunks = []
         self._chunk_chars = 0
         self._complete = asyncio.Event()
@@ -1183,6 +1187,7 @@ class ACPClientBase(ABC):
                 partial_output="".join(self._chunks),
             ) from exc
         finally:
+            permission_turn.active = False
             self._last_used = time.monotonic()
 
     async def query_stream(self, prompt: str) -> AsyncGenerator[str, None]:
@@ -1205,6 +1210,7 @@ class ACPClientBase(ABC):
         if not session_id:
             raise RuntimeError("No active ACP session")
         self._begin_permission_turn()
+        permission_turn = self._permission_turn
         self._chunks = []
         self._chunk_chars = 0
         complete = asyncio.Event()
@@ -1261,6 +1267,8 @@ class ACPClientBase(ABC):
                 self._stream_error = self._with_partial_output(exc)
                 if self._stream_queue:
                     self._stream_queue.put_nowait(None)
+            finally:
+                permission_turn.active = False
 
         send_task = asyncio.create_task(_send())
         completed = False
@@ -1917,6 +1925,7 @@ class ACPClientBase(ABC):
         if not self.session_id or not self._connected:
             return
         self._permission_turn.cancelled = True
+        self._permission_turn.active = False
         try:
             await wait_for_owned(
                 self._send_notification(
@@ -1934,6 +1943,7 @@ class ACPClientBase(ABC):
         Sends ``session/cancel`` first as a courtesy so the agent can
         flush any in-flight work cleanly before the pipe closes.
         """
+        self._permission_turn.active = False
         task = self._disconnect_task
         if task is None or task.done():
             task = asyncio.create_task(self._run_disconnect())
@@ -2919,6 +2929,8 @@ class ACPClientBase(ABC):
                         )
                         fut.set_exception(protocol_error)
                 finally:
+                    if inflight_method == "session/prompt":
+                        self._permission_turn.active = False
                     self._pending.pop(mid, None)
                     self._inflight.pop(mid, None)
             return
@@ -3189,7 +3201,7 @@ class ACPClientBase(ABC):
                     return
 
             turn = self._permission_request_turns.get(mid, self._permission_turn)
-            if turn.cancelled:
+            if turn.cancelled or not turn.active:
                 await self._send_host_result(mid, {"outcome": {"outcome": "cancelled"}})
                 return
 
@@ -3261,6 +3273,9 @@ class ACPClientBase(ABC):
                 action,
                 exception_summary(exc),
             )
-            await self._send_host_error(mid, -32603, "Host service request failed")
+            if service_type == "fs" and action == "read_text_file" and isinstance(exc, FileNotFoundError):
+                await self._send_host_error(mid, -32002, "Resource not found")
+            else:
+                await self._send_host_error(mid, -32603, "Host service request failed")
         else:
             await self._send_host_result(mid, result)

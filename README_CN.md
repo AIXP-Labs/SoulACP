@@ -78,7 +78,7 @@ python -m pip install -e ".[dev]"
 python -c "import importlib.metadata as m, soulacp; print(m.version('soulacp')); print(soulacp.__version__)"
 ```
 
-验收本 checkout 时两者应为 `0.2.1`。若不一致，可在本机检查
+验收本 checkout 时两者应为 `0.2.2`。若不一致，可在本机检查
 `soulacp.__file__`，分享诊断前须脱敏个人路径。Editable 安装、wheel 和下游
 锁文件是不同的安装来源；替换磁盘文件不会重载已经运行的 worker。
 
@@ -93,6 +93,10 @@ python -m pip install -e ".[otel]"
 ```
 
 ## 快速开始
+
+这些示例会启动真实且已认证的CLI，并可能以当前OS账号产生用量或工具副作用。
+仅在可信测试工作区使用合成输入；打印的回复是原始内容，不是脱敏诊断。
+运行前先查看[权限边界](#配置)。
 
 ### ManagedSession（推荐）
 
@@ -198,7 +202,7 @@ print("Installed:", installed)
 npm install -g "@agentclientprotocol/claude-agent-acp@>=0.86.0" "@agentclientprotocol/codex-acp@>=2.1.1"
 ```
 
-版本范围须保留引号，避免 shell 把 `>` 当作重定向。这些范围与 SoulACP 0.2.1
+版本范围须保留引号，避免 shell 把 `>` 当作重定向。这些范围与 SoulACP 0.2.2
 的安装提示一致，不是精确锁版，也不代表所有后续 bridge/模型组合均已验收。
 Bridge 可能自带 CLI/runtime，因此只升级全局 `claude` 或 `codex` 不能证明
 bridge 实际使用了哪个 runtime。应核对已安装 bridge 的包元数据和其报告的
@@ -523,8 +527,11 @@ session load/resume 在 Agent 未声明 `loadSession` 或
 > （优先 `allow_once`）。这不是操作系统沙箱。对不可信工作区应设为 `false`，
 > 并审查 provider CLI 自身的权限模型。
 
-取消回合的排队或迟到权限请求返回`cancelled`，重复选项ID在选择前拒绝。
-这不改变合法allow/reject策略，也不把ACP权限选择变成人类业务授权门。
+活动prompt回合之外的权限请求返回`cancelled`，包括首轮开始前、正常结束后，
+以及所属回合已结束或取消的排队请求。重复选项ID在选择前拒绝。
+已经开始发送的回复不能撤回。ACP v1权限请求不带prompt ID，因此在新回合中
+才首次到达的迟到请求不一定能归属到原回合。活动回合的allow/reject策略不变；
+这不是人类业务授权门。
 
 `pool_size` 不是并发上限。物理容量由每个 pool 实例自己的
 `pool_max_connections` 约束。每个 `ManagedSession` 实例按 `provider:model` key
@@ -545,6 +552,12 @@ session-affinity cache 的作用。同一个指定 session ID 同一时刻只允
 配置错误只报告字段和约束，不回显原始输入；非法数值环境变量会抑制原始解析异常链。
 会话控制拒绝消息省略用户提供的ID和值；URL解析异常链及严格JSON重复键错误不暴露输入文本。
 包括`capability`在内的原始结构化异常字段仍须按敏感信息处理。
+
+`auto_approve_permissions=False`只为经由
+`session/request_permission`的请求选择拒绝选项，不是对`fs/*`或`terminal/*`
+宿主服务的全局禁止开关。这些服务执行自身的配置根、schema和资源检查，不提供
+针对敏感配置文件的逐路径人类授权清单。需要更强限制的应用必须通过自己的
+host/provider策略和OS隔离落实。
 
 ### Provider 专用环境变量
 
@@ -597,6 +610,10 @@ config = ACPConfig(
 )
 ```
 
+`/absolute/path/to/shared`和`/absolute/path/to/mcp-server`是占位路径，
+不是已安装资源。请替换成运行CLI的机器上的真实绝对路径；Windows应使用原生
+带盘符绝对路径和可直接执行的MCP命令，而不是shell表达式。
+
 `extra_args` 会直接追加到子进程 argv，不经过 shell 展开，本地进程查看工具可见，
 因此绝不能放入凭据。`extra_env` 会合并到子进程环境并覆盖同名 key；两者都应视为
 可信配置，不要无差别记录到日志。
@@ -616,6 +633,11 @@ HTTP/SSE MCP server 只有在 Agent 声明
 对应能力后才发送，否则在发出不受支持的 session 请求前直接失败。
 
 ### 从环境变量读取
+
+`ACPConfig()`使用构造器默认值及显式参数，不自动读取`ACP_*`。
+`ACPConfig.from_env()`读取进程环境，显式关键字参数优先。SoulACP不会加载
+`.env`文件；调用应用或shell须在构造配置前加载所需值。不要为排查设置而打印
+整个环境。
 
 ```python
 import asyncio
@@ -698,7 +720,13 @@ response 只与 soulacp 发出的 int64 整数 ID 关联。所有外部 JSON 输
 连接重新放回池中。
 
 ACP 文件系统请求遵循 v1 的绝对 `path`；schema 边界 `line=0` 映射到第一行，
-`limit=0` 返回零行。请求只能位于 `cwd` 或校验后的
+`limit=0` 返回零行。未提供`limit`时读取至EOF，但所选文本必须满足未改变的
+10,000字符和10 MiB文件上限，否则明确失败。成功读取不会插入截断标记，
+也不会返回所请求行的片段。显式行数上限仍为10,000。文件不存在返回ACP资源缺失
+（`-32002`）；越根和其它宿主失败不会被改称为文件不存在。读取取消会等待所属
+工作线程完成。取消与读/写工作线程失败同时发生时，原始工作线程异常保留在取消异常
+显式的`cause`字段中；默认展示链只包含脱敏摘要。Python 3.10可能在外层asyncio Task
+边界包装取消异常，原取消异常仍保留在外层异常的context中。请求只能位于 `cwd` 或校验后的
 `additional_directories`，并限制文件、文本、写入和目录条目大小。读取仅接受普通文件，
 且针对已打开的数据流执行字节上限，即使文件在路径校验后增长也不会绕过。路径约束仍是
 文件系统拓扑稳定时的 best-effort 机制，不提供抗 symlink 竞态保护，也不是操作系统级
@@ -756,6 +784,17 @@ session ID、个人路径和身份信息。不要附上 `.env`、provider 认证
 会以未加密形式落盘，user key 使用确定性的伪匿名 hash；必须依靠操作系统权限保护，
 且不得跨信任域共享。仅有归属无歧义的旧版明文 cache key 会在访问时迁移；歧义映射
 会失效关闭，必须重新建立。
+
+旧版Cursor在自动批准开启且未显式提供等价flag时还会追加`--force`。
+这一既有行为不变；应按需要显式配置拒绝或使用原生ACP适配器。
+最小环境设置不会隔离当前账户保存在磁盘上的CLI登录。
+
+认证与服务条款因Provider而异。API key本身不证明可以共享或转售用量；
+未经Provider允许，不应以一个人的订阅凭据服务其他用户。
+每个部署须按Provider现行规则审查身份与凭据归属，包括
+[Claude Code法律说明](https://code.claude.com/docs/en/legal-and-compliance)和
+[Gemini CLI认证](https://geminicli.com/docs/get-started/authentication/)。
+SoulACP不收集终端用户凭据，也不提供合规保证。
 
 旧版 Cursor CLI prompt 已通过 stdin 发送，不再进入 argv；但 Cursor 文档化的 resume
 接口仍要求 session ID 出现在 `--resume` 中，显式 `OPENCLAW_SESSION_KEY` 同样属于
@@ -815,9 +854,9 @@ PYTHONPATH=src python -m pyright --verifytypes soulacp --ignoreexternal
 python -m bandit -q -r src/soulacp
 
 # 在全新空目录构建，不与历史发布混用
-python tools/build_release.py --outdir dist/0.2.1
-python -m twine check dist/0.2.1/soulacp-0.2.1-py3-none-any.whl dist/0.2.1/soulacp-0.2.1.tar.gz
-python tools/check_sdist.py dist/0.2.1/soulacp-0.2.1.tar.gz
+python tools/build_release.py --outdir dist/0.2.2
+python -m twine check dist/0.2.2/soulacp-0.2.2-py3-none-any.whl dist/0.2.2/soulacp-0.2.2.tar.gz
+python tools/check_sdist.py dist/0.2.2/soulacp-0.2.2.tar.gz
 ```
 
 仓库hook使用独立Python >=3.11的[hook环境](CONTRIBUTING_CN.md#独立仓库-hook-环境)。
@@ -886,7 +925,7 @@ AIXP Labs 开发并维护以下核心项目：
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.1. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.2. www.soulacp.dev
 
 <a id="values-philosophy"></a>
 

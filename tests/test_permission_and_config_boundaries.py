@@ -18,6 +18,8 @@ class CaptureClient(ACPClientBase):
         super().__init__(ACPConfig(auto_approve_permissions=auto_approve))
         self._connected = True
         self.session_id = "synthetic-session"
+        # These fixtures exercise option selection within an active prompt.
+        self._begin_permission_turn()
         self.results = []
         self.errors = []
         self.notifications = []

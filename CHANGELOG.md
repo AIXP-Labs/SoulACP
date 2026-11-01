@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 No changes yet.
 
+## [0.2.2] - 2026-10-31
+
+Source candidate only; this entry is not a publication or deployment receipt.
+
+### Fixed
+- Keep original read/write worker failures in an explicit private `cause` when
+  caller cancellation wins; use a redacted default exception chain without
+  changing worker ownership, cancellation identity, or uncancelled failures.
+- Read the requested file range without inserting a truncation marker or silently
+  applying a 2,000-line default. Omitted limits read to EOF only within the existing
+  10,000-character and 10 MiB file budgets; oversized results fail explicitly.
+  Preserve explicit line limits, path containment and owned read-worker cleanup.
+- Return ACP resource-not-found (`-32002`) for missing files in `fs/read_text_file`,
+  without exposing paths or reclassifying containment and other service failures.
+- Close the permission window when the correlated prompt completes, fails,
+  cancels or disconnects. Keep queued requests bound to their original turn and
+  preserve the active-turn allow/reject policy. Replies already started cannot
+  be withdrawn; v1 requests do not universally identify the originating prompt.
+
+### Documentation
+- Describe exact-read resource limits, permission lifecycle boundaries and the
+  unchanged legacy Cursor `--force` behavior in both README languages.
+- Clarify constructor versus process-environment loading, the absence of an
+  automatic dotenv loader, executable path placeholders, and permission-option
+  selection versus host-service policy. Remove obsolete API references without
+  changing configuration or authorization behavior.
+
 ## [0.2.1] - 2026-09-10
 
 These notes describe the 0.2.1 source scope. Distribution identity and actual

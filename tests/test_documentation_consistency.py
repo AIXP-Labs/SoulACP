@@ -1,13 +1,17 @@
 """Offline documentation contracts, without provider calls or sibling checkouts."""
 
 import ast
+import os
 import re
+import unicodedata
 from collections import Counter
 from pathlib import Path
+from urllib.parse import unquote
 
 import pytest
 
 import soulacp
+from soulacp import ACPConfig
 
 ROOT = Path(__file__).resolve().parents[1]
 READMES = [ROOT / "README.md", ROOT / "README_CN.md"]
@@ -36,8 +40,8 @@ QUALITY_COMMANDS = (
     "python -m pytest tests/ -W error -v --cov=soulacp --cov-branch --cov-report=term",
     "python -m ruff check src/soulacp/ tests/ examples/ tools/",
     "python -m ruff format --check src/soulacp/ tests/ examples/ tools/",
-    "python tools/build_release.py --outdir dist/0.2.1",
-    "python tools/check_sdist.py dist/0.2.1/soulacp-0.2.1.tar.gz",
+    "python tools/build_release.py --outdir dist/0.2.2",
+    "python tools/check_sdist.py dist/0.2.2/soulacp-0.2.2.tar.gz",
 )
 
 
@@ -249,3 +253,115 @@ def test_maintainer_template_distinguishes_qualification_scopes():
         "authenticated provider",
     ]:
         assert phrase in document
+
+
+def heading_ids(document):
+    """GitHub-style fragments for the headings used by these repository docs."""
+    text = re.sub(r"(?ms)^```[^\n]*\n.*?^```", "", document)
+    result = set(re.findall(r'<a\s+id="([^"]+)"', text))
+    counts = Counter()
+    for title in re.findall(r"(?m)^#{1,6} (.+)$", text):
+        title = re.sub(r"\[([^]]+)\]\([^)]+\)", r"\1", title)
+        title = re.sub(r"<[^>]+>", "", title).lower()
+        slug = "".join(c for c in title if c in {" ", "_", "-"} or unicodedata.category(c)[0] in {"L", "N"})
+        slug = slug.replace(" ", "-")
+        count = counts[slug]
+        counts[slug] += 1
+        result.add(slug + (f"-{count}" if count else ""))
+    return result
+
+
+def local_links(document, parent):
+    for target in re.findall(r"\]\(([^)]+)\)", document):
+        if re.match(r"[a-zA-Z][a-zA-Z0-9+.-]*:", target):
+            continue
+        file, separator, fragment = target.partition("#")
+        path = parent / unquote(file) if file else None
+        if path is not None:
+            assert path.is_file(), "missing local document target"
+        if separator and fragment:
+            linked = path.read_text(encoding="utf-8") if path is not None else document
+            assert unquote(fragment) in heading_ids(linked), "missing local document fragment"
+
+
+@pytest.mark.parametrize(
+    "path", [*sorted(ROOT.glob("*.md")), ROOT / ".github/pull_request_template.md"], ids=lambda p: p.name
+)
+def test_document_fragment_targets_exist(path):
+    local_links(path.read_text(encoding="utf-8"), path.parent)
+
+
+@pytest.mark.parametrize("mutation", ["missing_file", "missing_fragment", "renamed_heading"])
+def test_document_fragment_checker_rejects_broken_links(tmp_path, mutation):
+    good = "# Sample\n\n## Scope\n\n[Scope](#scope)\n\n[Other](other.md#policy)\n"
+    (tmp_path / "other.md").write_text("# Other\n\n## Policy\n", encoding="utf-8")
+    local_links(good, tmp_path)
+    if mutation == "missing_file":
+        bad = good.replace("other.md", "absent.md")
+    elif mutation == "missing_fragment":
+        bad = good.replace("#scope)", "#absent)")
+    else:
+        bad = good.replace("## Scope", "## Renamed")
+    with pytest.raises(AssertionError):
+        local_links(bad, tmp_path)
+
+
+def test_document_fragments_support_explicit_ids_duplicates_and_unicode(tmp_path):
+    document = '# 示例\n\n## API `name`\n\n## API `name`\n\n<a id="explicit"></a>\n\n[One](#api-name) [Two](#api-name-1) [CN](#示例) [ID](#explicit)\n'
+    local_links(document, tmp_path)
+
+
+@pytest.mark.parametrize("path", READMES, ids=lambda p: p.name)
+def test_readme_explains_constructor_and_dotenv_boundaries(path):
+    document = path.read_text(encoding="utf-8")
+    assert "`ACPConfig()`" in document
+    assert "`.env`" in document
+    assert "`ACPConfig.from_env()`" in document
+
+
+@pytest.mark.parametrize("path", [*READMES, ROOT / "SECURITY.md"], ids=lambda p: p.name)
+def test_permission_selection_is_not_a_host_service_deny_switch(path):
+    document = path.read_text(encoding="utf-8")
+    for phrase in ("`auto_approve_permissions=False`", "`session/request_permission`", "`fs/*`", "`terminal/*`"):
+        assert phrase in document
+
+
+def test_config_documentation_does_not_reference_nonexistent_registry_or_unverified_policy():
+    document = (ROOT / "src/soulacp/config.py").read_text(encoding="utf-8")
+    assert "ModelRegistry" not in document
+    assert "sandbox_permissions" not in document
+    assert "ACPConfig.from_env()" in ACPConfig.__doc__
+    assert ".env" in ACPConfig.__doc__
+
+
+def test_documented_environment_loading_precedence_without_provider_calls(monkeypatch, tmp_path):
+    for key in list(os.environ):
+        if key.startswith("ACP_"):
+            monkeypatch.delenv(key)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("ACP_POOL_SIZE=1\n", encoding="utf-8")
+    assert ACPConfig().pool_size == ACPConfig.from_env().pool_size == 5
+    monkeypatch.setenv("ACP_POOL_SIZE", "2")
+    assert ACPConfig().pool_size == 5
+    assert ACPConfig.from_env().pool_size == 2
+    assert ACPConfig.from_env(pool_size=3).pool_size == 3
+
+
+@pytest.mark.parametrize(
+    "path,heading", [(READMES[0], "### Programmatic"), (READMES[1], "### 代码配置")], ids=["README.md", "README_CN.md"]
+)
+def test_documented_programmatic_config_constructs_without_launching_provider(path, heading):
+    body = section(path.read_text(encoding="utf-8"), heading)
+    blocks = re.findall(r"(?ms)^```python\n(.*?)^```", body)
+    assert len(blocks) == 1
+    # This configuration-only block must never grow a provider call or file write.
+    parsed = ast.parse(blocks[0])
+    calls = [node for node in ast.walk(parsed) if isinstance(node, ast.Call)]
+    assert len(calls) == 1 and isinstance(calls[0].func, ast.Name) and calls[0].func.id == "ACPConfig"
+    scope = {}
+    exec(compile(parsed, "<synthetic-documented-config>", "exec"), scope)
+    config = scope["config"]
+    assert isinstance(config, ACPConfig)
+    assert config.provider == "claude" and config.pool_max_connections == 8
+    assert config.auto_approve_permissions is True
+    assert config.additional_directories == ["/absolute/path/to/shared"]

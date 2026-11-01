@@ -94,7 +94,7 @@ SoulACP follows Semantic Versioning:
 Pre-1.0 releases may refine APIs more quickly, but breaking changes still
 require explicit changelog and migration guidance.
 
-The current source target is **0.2.1**. A patch must preserve the documented
+The current source target is **0.2.2**. A patch must preserve the documented
 public API and safety policy. Source metadata, installed metadata, import
 location, distribution contents, and downstream lock files are separate
 identities to verify. Historical changelog entries retain their own versions;
@@ -119,4 +119,4 @@ testable safety and compatibility contracts described above.
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.1. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.2. www.soulacp.dev

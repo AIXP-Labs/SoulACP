@@ -10,6 +10,8 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, BinaryIO, TypeVar
 
+from soulacp.privacy import _raise_private_cause
+
 from .path_utils import resolve_path
 
 _T = TypeVar("_T")
@@ -55,12 +57,12 @@ async def _await_owned_thread(func: Callable[..., _T], *args: Any) -> _T:
                 try:
                     task.result()
                 except BaseException as worker_error:
-                    raise cancellation from worker_error
+                    _raise_private_cause(cancellation, worker_error)
                 raise cancellation from None
             continue
         except BaseException as exc:
             if cancellation is not None:
-                raise cancellation from exc
+                _raise_private_cause(cancellation, exc)
             raise
         else:
             if cancellation is not None:
@@ -110,14 +112,14 @@ class FSService:
         start_line = max(1, start_line)
         if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 0):
             raise ValueError("limit must be an integer >= 0")
-        line_limit = self.DEFAULT_LINE_LIMIT if limit is None else limit
-        if line_limit > self.MAX_LINE_LIMIT:
+        line_limit = limit
+        if line_limit is not None and line_limit > self.MAX_LINE_LIMIT:
             raise ValueError(f"limit must be <= {self.MAX_LINE_LIMIT}")
 
         resolved = resolve_path(path, self.cwd, self.additional_directories)
-        return await asyncio.to_thread(self._read_resolved, resolved, start_line, line_limit)
+        return await _await_owned_thread(self._read_resolved, resolved, start_line, line_limit)
 
-    def _read_resolved(self, resolved: Path, start_line: int, line_limit: int) -> dict[str, Any]:
+    def _read_resolved(self, resolved: Path, start_line: int, line_limit: int | None) -> dict[str, Any]:
         metadata = resolved.stat()
         if stat.S_ISDIR(metadata.st_mode):
             raise IsADirectoryError("Requested path is not a text file")
@@ -133,7 +135,6 @@ class FSService:
 
             selected: list[str] = []
             selected_chars = 0
-            truncated = False
             bounded_raw = _BoundedRawReader(raw_handle, self.MAX_FILE_BYTES)
             with io.TextIOWrapper(
                 io.BufferedReader(bounded_raw), encoding="utf-8", errors="replace", newline=None
@@ -141,20 +142,14 @@ class FSService:
                 for line_number, text in enumerate(handle, start=1):
                     if line_number < start_line:
                         continue
-                    if len(selected) >= line_limit:
+                    if line_limit is not None and len(selected) >= line_limit:
                         break
-                    remaining = self.MAX_READ_CHARS - selected_chars
-                    if len(text) > remaining:
-                        selected.append(text[: max(0, remaining)])
-                        truncated = True
-                        break
+                    if selected_chars + len(text) > self.MAX_READ_CHARS:
+                        raise ValueError(f"content exceeds the {self.MAX_READ_CHARS}-character read limit")
                     selected.append(text)
                     selected_chars += len(text)
 
         content = "".join(selected)
-        if truncated:
-            content += "\n[... truncated by client character limit ...]"
-
         return {"content": content}
 
     async def write_text_file(

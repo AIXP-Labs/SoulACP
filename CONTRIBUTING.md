@@ -103,7 +103,7 @@ and session-cache locations, but are not a substitute for reviewing staged files
 
 ### Release Identity and Privacy
 
-For the current **0.2.1** source target:
+For the current **0.2.2** source target:
 
 1. Check `pyproject.toml`, `src/soulacp/meta.py`, the root `soulacp` entry in
    `uv.lock`, current documentation footers, and the current changelog entry.
@@ -114,7 +114,7 @@ For the current **0.2.1** source target:
    for a subsequent build. `make clean` remains an explicitly destructive action:
 
    ```bash
-   python tools/build_release.py --outdir dist/0.2.1
+   python tools/build_release.py --outdir dist/0.2.2
    # Alternatively: make build DIST_DIR=dist/another-new-directory
    ```
 
@@ -152,6 +152,13 @@ Run the offline documentation regressions with
 Review external source claims separately; a local link check does not prove a
 remote page or model is available. Preserve older changelog entries as history.
 
+Configuration examples must distinguish `ACPConfig()` from
+`ACPConfig.from_env()` and never imply automatic `.env` loading. Permission
+examples must separate `session/request_permission` selection from `fs/*` and
+`terminal/*` service policy. For documentation-only edits in Python files,
+compare executable ASTs with documentation strings removed and retain runtime
+regressions; a green prose/link check alone does not establish unchanged behavior.
+
 ## Code of Conduct
 
 By participating, you agree to abide by the [Code of Conduct](CODE_OF_CONDUCT.md).
@@ -164,4 +171,4 @@ Copyright 2026 AIXP Labs AIXP.dev | SoulACP.dev
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.1. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.2. www.soulacp.dev

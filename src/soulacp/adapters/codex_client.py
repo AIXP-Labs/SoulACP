@@ -39,7 +39,7 @@ class CodexACPClient(ACPClientBase):
     2. ``CODEX_REASONING_EFFORT`` in ``ACPConfig.extra_env`` or the process
        environment::
 
-           # In .env or shell:
+           # Set in the process environment (load any .env in the caller):
            CODEX_REASONING_EFFORT=high
 
     3. Built-in default ``"medium"`` if neither of the above is set.
@@ -142,8 +142,8 @@ class CodexACPClient(ACPClientBase):
         await self._send_notification("initialized")
 
         # 3. session/new — codex-acp 0.14+ requires mcpServers field.
-        #    Auth is implicit: codex-acp uses ~/.codex/auth.json (ChatGPT)
-        #    or OPENAI_API_KEY env var, whichever is available.
+        #    Auth is implicit in the bridge's effective credential configuration;
+        #    an environment API key alone does not select its authentication mode.
         result = await self._rpc(
             "session/new",
             {

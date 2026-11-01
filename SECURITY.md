@@ -6,7 +6,7 @@ Security fixes are applied to the latest released minor version and the
 current `main` branch. Users should reproduce reports against the newest
 available release before submitting them.
 
-The current checkout targets 0.2.1; a source version or changelog date is not a
+The current checkout targets 0.2.2; a source version or changelog date is not a
 publication receipt. Identify the actual installed distribution and source or
 artifact revision in a report. Reproductions should use synthetic inputs rather
 than real credentials or private session data.
@@ -73,10 +73,23 @@ available; use `false` for untrusted workspaces and configure the provider
 CLI's own sandbox and permission policy.
 
 ACP permission-option selection is not an end user's business authorization.
-Cancelled prompt turns return cancelled permission outcomes, including for
-already-queued requests; duplicate option identifiers are rejected before selection.
+Permission requests outside an active prompt turn, including requests queued
+under a completed or cancelled turn, return cancelled outcomes. Duplicate option
+identifiers are rejected before selection. Replies already started cannot be
+withdrawn; ACP v1 cannot always identify a previously unseen old permission
+request first arriving during a new turn. These checks cover mediated requests,
+not every native CLI operation. File reads fail rather than returning a truncated
+requested range; existing character, byte, line and containment limits remain.
 Applications must implement their own human decision gates; SoulACP does not
 infer consent from a prompt, a model response, or a successful permission RPC.
+
+`auto_approve_permissions=False` controls selection for
+`session/request_permission`; it does not globally disable `fs/*` or
+`terminal/*` host services. Their configured-root, schema and resource checks
+are separate from permission-option selection. The built-in services do not
+provide a per-path human approval list for sensitive configuration files.
+Applications needing that policy must enforce it through their host/provider
+integration and OS isolation; do not treat this flag as filesystem read-only mode.
 
 Session cache files contain unencrypted provider session identifiers. Protect
 them with OS permissions and do not share them between trust domains.
@@ -117,6 +130,10 @@ only a bounded failure/cancellation category and error status are retained.
 File-cache persistence errors preserve the OSError category and errno but redact
 public filenames. Their explicit `cause` retains the original filesystem error
 and is sensitive, like other raw diagnostic objects.
+If a file-service worker fails while its caller is cancelled, the cancelled
+exception retains the original worker error in its explicit `cause` field;
+the default display chain uses a redacted summary, even with sensitive logging
+enabled. This does not change uncancelled filesystem error behavior.
 Response wrappers keep original diagnostic identity in `cause`, and fallback
 failures retain the earlier error in `primary_cause`. The default `__cause__`
 display chain contains a redacted summary instead of those original objects.
@@ -163,4 +180,4 @@ mitigation is available.
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.1. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.2. www.soulacp.dev

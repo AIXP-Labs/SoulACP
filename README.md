@@ -78,7 +78,7 @@ Check the interpreter, distribution metadata, and imported module together:
 python -c "import importlib.metadata as m, soulacp; print(m.version('soulacp')); print(soulacp.__version__)"
 ```
 
-Both values should be `0.2.1` when validating this checkout. Locally inspect
+Both values should be `0.2.2` when validating this checkout. Locally inspect
 `soulacp.__file__` if the values differ; redact personal paths before sharing
 diagnostics. Editable installs, wheels, and downstream lock files are distinct
 installation sources. Replacing files does not reload an already-running worker.
@@ -94,6 +94,11 @@ python -m pip install -e ".[otel]"
 ```
 
 ## Quick Start
+
+These examples launch a real, authenticated CLI and can incur usage or tool
+side effects under the current OS account. Run only in a trusted test workspace
+with synthetic input; printed replies are original content, not redacted
+diagnostics. Review the [permission boundaries](#configuration) before running.
 
 ### ManagedSession (recommended)
 
@@ -201,7 +206,7 @@ npm install -g "@agentclientprotocol/claude-agent-acp@>=0.86.0" "@agentclientpro
 ```
 
 Keep the quotes so the shell does not treat `>` as a redirect. These ranges
-match SoulACP 0.2.1's installation hints; they are not exact version pins or
+match SoulACP 0.2.2's installation hints; they are not exact version pins or
 qualification of every later bridge/model combination. A bridge can bundle its
 own CLI/runtime, so upgrading a global `claude` or `codex` alone does not prove
 which runtime the bridge will use. Check the bridge's installed package metadata
@@ -550,10 +555,20 @@ requested model was selected.
 > OS sandbox. Set it to `false` for untrusted workspaces and review the provider
 > CLI's own permission model.
 
-Cancelled turns return a `cancelled` permission outcome for queued or late
-requests, and duplicate option IDs are rejected before selection. This does
-not change valid allow/reject policy or make ACP permission selection a human
-business-authorization gate.
+Permission requests outside an active prompt turn return a `cancelled` outcome,
+including before the first prompt, after completion, and for queued requests
+whose owning turn has ended or been cancelled. Duplicate option IDs are rejected
+before selection. Already-started replies cannot be withdrawn. ACP v1 has no
+prompt ID on permission requests, so a previously unseen late request arriving
+during a new turn cannot always be attributed to its original turn. Active-turn
+allow/reject policy is unchanged; this is not a human business-authorization gate.
+
+`auto_approve_permissions=False` selects rejection for mediated
+`session/request_permission` requests; it is not a global deny switch for
+`fs/*` or `terminal/*` host services. Those services apply their own configured
+root, schema and resource checks, not a per-path human approval list for
+sensitive configuration files. Applications requiring stronger restrictions
+must enforce them through their host/provider policy and OS isolation.
 
 `pool_size` is not a concurrency limit. Total physical capacity is bounded by
 `pool_max_connections` for each pool instance. Each `ManagedSession` creates
@@ -633,6 +648,11 @@ config = ACPConfig(
 )
 ```
 
+The `/absolute/path/to/shared` and `/absolute/path/to/mcp-server` values are
+placeholders, not installed resources. Replace them with real absolute paths
+on the machine running the CLI; on Windows, use native drive-qualified paths
+and a directly executable MCP command rather than a shell expression.
+
 `extra_args` is appended to the subprocess argv without shell expansion and is
 visible to local process-inspection tools. Never put credentials in it.
 `extra_env` is merged into the subprocess environment and overrides duplicate
@@ -658,6 +678,13 @@ capability, otherwise session creation fails before an unsupported request is
 sent.
 
 ### From Environment
+
+`ACPConfig()` uses constructor defaults and explicit arguments; it does not
+read `ACP_*` values automatically. `ACPConfig.from_env()` reads the process
+environment, with explicit keyword arguments taking precedence. SoulACP does
+not load `.env` files; the calling application or shell must load any required
+values before constructing the config. Never print that environment to diagnose
+a setting.
 
 ```python
 import asyncio
@@ -760,7 +787,19 @@ agent, so the transport is retired after best-effort `$/cancel_request` rather
 than being returned to the pool with potentially divergent session state.
 
 ACP filesystem requests honor the v1 absolute `path`; schema-boundary `line=0`
-maps to the first 1-based line, and `limit=0` returns no lines. Requests are
+maps to the first 1-based line, and `limit=0` returns no lines. Reads continue
+to EOF when `limit` is omitted, provided the selected text fits the unchanged
+10,000-character and 10 MiB file limits; otherwise the read fails explicitly.
+Successful reads never insert truncation markers or return a partial requested
+line. Explicit line limits remain bounded to 10,000. Missing files return ACP
+resource-not-found (`-32002`); containment and other host failures are not
+reclassified as missing files. Read cancellation waits for the owned worker.
+When cancellation coincides with a read/write worker failure, the original
+worker exception remains in the cancelled exception's explicit `cause` field;
+the default display chain contains only a redacted summary.
+Python 3.10 may wrap this cancellation at an outer asyncio Task boundary; the
+original cancellation remains in that outer exception's context.
+Requests are
 contained to `cwd` plus validated `additional_directories` and bound file, text,
 write, and directory sizes. Reads accept regular files only and enforce the byte
 limit on the opened stream, including files that grow after path validation.
@@ -838,6 +877,19 @@ share it across trust domains. Only unambiguous legacy plaintext cache keys are
 migrated when accessed; ambiguous mappings fail closed and must be
 re-established.
 
+Legacy Cursor additionally appends `--force` when automatic approval is enabled
+and no equivalent explicit flag is supplied. This existing behavior is unchanged;
+use explicit rejection configuration or the native ACP adapter as appropriate.
+Minimal environment settings do not isolate the account's on-disk CLI login.
+
+Authentication and service terms are provider-specific. An API key alone does
+not establish permission to pool or resell usage; do not use one person's
+subscription credentials to serve other users without the provider's authority.
+Each deployment must review its identities and credential ownership against the
+provider's current rules, including [Claude Code legal guidance](https://code.claude.com/docs/en/legal-and-compliance)
+and [Gemini CLI authentication](https://geminicli.com/docs/get-started/authentication/).
+SoulACP does not collect end-user credentials or provide a compliance guarantee.
+
 Legacy Cursor CLI prompts are sent through stdin, not argv. Cursor's documented
 resume interface still requires the session ID in `--resume`, and explicit
 `OPENCLAW_SESSION_KEY` values are likewise command-line metadata. Prefer the
@@ -899,9 +951,9 @@ PYTHONPATH=src python -m pyright --verifytypes soulacp --ignoreexternal
 python -m bandit -q -r src/soulacp
 
 # Build into a new, empty output directory; do not mix historical releases
-python tools/build_release.py --outdir dist/0.2.1
-python -m twine check dist/0.2.1/soulacp-0.2.1-py3-none-any.whl dist/0.2.1/soulacp-0.2.1.tar.gz
-python tools/check_sdist.py dist/0.2.1/soulacp-0.2.1.tar.gz
+python tools/build_release.py --outdir dist/0.2.2
+python -m twine check dist/0.2.2/soulacp-0.2.2-py3-none-any.whl dist/0.2.2/soulacp-0.2.2.tar.gz
+python tools/check_sdist.py dist/0.2.2/soulacp-0.2.2.tar.gz
 ```
 
 Repository hooks use the separate Python >=3.11
@@ -974,7 +1026,7 @@ This software is **experimental** and provided for **research and educational pu
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.1. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.2. www.soulacp.dev
 
 <a id="alignment-philosophy"></a>
 
