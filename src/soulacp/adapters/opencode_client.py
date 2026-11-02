@@ -35,7 +35,7 @@ from soulacp.environment import (
     get_subprocess_environment_value,
     update_subprocess_environment,
 )
-from soulacp.errors import ACPProtocolError, ACPRequestOutcomeUnknownError, ACPResponseError
+from soulacp.errors import ACPAuthenticationError, ACPProtocolError, ACPRequestOutcomeUnknownError, ACPResponseError
 from soulacp.meta import CLIENT_NAME, __version__
 from soulacp.privacy import _raise_private_cause, exception_summary, sensitive_logging_enabled
 
@@ -128,6 +128,7 @@ class OpenCodeACPClient(ACPClientBase):
 
     async def _start_and_initialize(self) -> None:
         self._reset_protocol_state()
+        self._explicit_auth_attempted = False
         await self._prepare_host_services()
         cmd = self._get_acp_command()
         self._command_identity = cmd[0]
@@ -372,6 +373,7 @@ class OpenCodeACPClient(ACPClientBase):
         if not self.is_connected:
             raise ConnectionError("OpenCode not connected")
 
+        self._check_authentication_rpc(method, params)
         params = self._normalize_rpc_params(method, params)
         params = self._apply_configured_session_params(method, params)
 
@@ -405,32 +407,43 @@ class OpenCodeACPClient(ACPClientBase):
                 loop = asyncio.get_running_loop()
                 deadline = loop.time() + timeout
                 request_write_started = True
+                if method == "authenticate" and self._auth_method_id is not None:
+                    self._explicit_auth_attempted = True
+                    self._explicit_auth_succeeded = False
                 await self._write_with_timeout(msg, timeout)
                 result = await self._await_rpc_future(future, deadline)
                 self._complete_rpc_lifecycle(method, result, transition_id)
                 transition_succeeded = True
-                return result
             except asyncio.CancelledError:
                 await self._notify_request_cancel(mid)
                 if request_write_started:
                     await self._invalidate_uncertain_rpc_transport(method)
                 raise
-            except asyncio.TimeoutError:
+            except asyncio.TimeoutError as exc:
                 await self._notify_request_cancel(mid)
                 if request_write_started:
                     await self._invalidate_uncertain_rpc_transport(method)
+                if method == "authenticate" and self._auth_method_id is not None:
+                    _raise_private_cause(ACPAuthenticationError(), exc)
                 raise
-            except RPCError:
+            except RPCError as exc:
+                if method == "authenticate" and self._auth_method_id is not None:
+                    self._pool_reusable = False
+                    _raise_private_cause(ACPAuthenticationError(), exc)
                 raise
-            except ACPResponseError:
+            except ACPResponseError as exc:
                 if request_write_started:
                     await self._invalidate_uncertain_rpc_transport(method)
+                if method == "authenticate" and self._auth_method_id is not None:
+                    _raise_private_cause(ACPAuthenticationError(), exc)
                 raise
             except Exception as exc:
                 if request_write_started:
                     await self._invalidate_uncertain_rpc_transport(method)
                 if prompt_write_started:
                     _raise_private_cause(ACPRequestOutcomeUnknownError(exc), exc)
+                if method == "authenticate" and self._auth_method_id is not None:
+                    _raise_private_cause(ACPAuthenticationError(), exc)
                 raise
             finally:
                 self._finish_rpc_lifecycle(transition_id, previous_session_state, transition_succeeded)
@@ -438,6 +451,9 @@ class OpenCodeACPClient(ACPClientBase):
                 with self._pending_lock:
                     self._pending.pop(mid, None)
                     self._inflight.pop(mid, None)
+        if method == "initialize":
+            await self._authenticate_explicitly()
+        return result
 
     async def _send_notification(self, method: str, params: dict | None = None) -> None:
         if not self.is_connected:

@@ -13,6 +13,34 @@ publication status; use exact source/artifact release receipts for that status.
 
 No changes yet.
 
+## [0.2.4] - Unreleased
+
+This is a source candidate, not a deployment or publication receipt.
+
+### Added
+- Constructor-only `auth_method_id` selects one uniquely advertised method,
+  bound to its original provider and snapshotted by pools and native clients.
+- `ACPAuthenticationError` prevents automatic retry or provider fallback after
+  explicit authentication failure, retaining original errors in a private cause.
+
+### Security and Compatibility
+- Apply explicit selection before session creation across native ACP transports,
+  including OpenCode; legacy non-ACP Cursor rejects it. Manual authentication
+  cannot switch methods on an explicitly bound client. No credentials are stored.
+- Preserve adapter defaults when no selection is supplied. This does not remove
+  advertised-first authentication risks or native authentication side effects.
+- Preserve safe pre-authentication retries, prompt non-replay, permission defaults,
+  text budgets, standard-library core and Python 3.10 support. No new permission
+  callback, result API, PATH policy, provider-specific host patch or budget increase.
+
+### Documentation
+- Qualify the Gemini advertised-first warning as the unconfigured default, link
+  explicit selection, and include authentication failure in both caller error tables.
+- Document selection-field repr redaction and consumer restart checks for shared
+  installs, unchanged dependency debt, existing startup catch-up and data-safe rollback.
+- Preserve historical release entries and current execution/security behavior;
+  bilingual documentation and platform qualifications remain independently verified.
+
 ## [0.2.3] - Unreleased
 
 This is an unreleased source candidate, not a deployment or publication receipt.

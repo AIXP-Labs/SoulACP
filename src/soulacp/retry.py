@@ -62,9 +62,9 @@ def is_retryable(error: Exception) -> bool:
     # Pool pressure, explicit response deadlines, and any failure after partial
     # output must not be replayed automatically.
     try:
-        from soulacp.errors import ACPPoolError, ACPResponseError
+        from soulacp.errors import ACPAuthenticationError, ACPPoolError, ACPResponseError
 
-        if isinstance(error, (ACPPoolError, ACPResponseError)):
+        if isinstance(error, (ACPAuthenticationError, ACPPoolError, ACPResponseError)):
             return False
     except ImportError:  # pragma: no cover - package layout change
         pass

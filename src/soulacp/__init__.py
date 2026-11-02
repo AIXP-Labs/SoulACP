@@ -83,6 +83,7 @@ from soulacp.binary import (
 from soulacp.cache import CacheBackend, FileCache, MemoryCache
 from soulacp.config import ACPConfig, resolve_client_class, resolve_provider
 from soulacp.errors import (
+    ACPAuthenticationError,
     ACPError,
     ACPPartialResponseError,
     ACPPoolAcquireTimeoutError,
@@ -165,6 +166,7 @@ __all__ = [
     # Errors
     "RPCError",
     "ACPError",
+    "ACPAuthenticationError",
     "ACPPoolError",
     "ACPPoolClosedError",
     "ACPPoolAcquireTimeoutError",

@@ -40,8 +40,8 @@ QUALITY_COMMANDS = (
     "python -m pytest tests/ -W error -v --cov=soulacp --cov-branch --cov-report=term",
     "python -m ruff check src/soulacp/ tests/ examples/ tools/",
     "python -m ruff format --check src/soulacp/ tests/ examples/ tools/",
-    "python tools/build_release.py --outdir dist/0.2.3",
-    "python tools/check_sdist.py dist/0.2.3/soulacp-0.2.3.tar.gz",
+    f"python tools/build_release.py --outdir dist/{soulacp.__version__}",
+    f"python tools/check_sdist.py dist/{soulacp.__version__}/soulacp-{soulacp.__version__}.tar.gz",
 )
 
 
@@ -414,6 +414,63 @@ def test_gemini_warning_precedes_the_live_example(path):
     assert body.index("`clearCachedCredentialFile`") < body.index("```python")
     assert "`authMethods[0]`" in body
     assert "0.51.0" in body
+
+
+def authentication_warning_contract(body):
+    warning = body.split("```python", 1)[0]
+    for token in ("`auth_method_id=None`", "`authMethods[0]`", "`clearCachedCredentialFile`"):
+        assert token in warning
+    assert "](#explicit-authentication-selection)" in warning or "](#显式认证选择)" in warning
+
+
+@pytest.mark.parametrize("path", READMES, ids=lambda path: path.name)
+def test_gemini_warning_limits_advertised_first_to_default_and_links_opt_in(path):
+    authentication_warning_contract(section(path.read_text(encoding="utf-8"), "### Gemini"))
+
+
+@pytest.mark.parametrize("missing", ["default", "method", "side_effect", "selection_link"])
+def test_authentication_warning_contract_rejects_incomplete_scope(missing):
+    tokens = {
+        "default": "`auth_method_id=None`",
+        "method": "`authMethods[0]`",
+        "side_effect": "`clearCachedCredentialFile`",
+        "selection_link": "[Selection](#explicit-authentication-selection)",
+    }
+    good = " ".join(tokens.values()) + "\n```python\npass\n```"
+    authentication_warning_contract(good)
+    with pytest.raises(AssertionError):
+        authentication_warning_contract(good.replace(tokens[missing], ""))
+
+
+@pytest.mark.parametrize(
+    "path,heading",
+    [(READMES[0], "### Error handling"), (READMES[1], "### 错误处理")],
+    ids=["README.md", "README_CN.md"],
+)
+def test_authentication_error_is_in_caller_responsibility_table(path, heading):
+    rows = table(path.read_text(encoding="utf-8"), heading)
+    matches = [row for row in rows if row[0] == "`ACPAuthenticationError`"]
+    assert len(matches) == 1 and "`cause`" in matches[0][1]
+
+
+@pytest.mark.parametrize("path", READMES, ids=lambda path: path.name)
+def test_readme_config_repr_mentions_authentication_selection_privacy(path):
+    document = path.read_text(encoding="utf-8")
+    heading = "### Programmatic" if path.name == "README.md" else "### 代码配置"
+    body = section(document, heading)
+    paragraph = (
+        next(p for p in re.split(r"\n\s*\n", body) if "`ACPConfig`" in p and "represent" in p.lower())
+        if path.name == "README.md"
+        else next(p for p in re.split(r"\n\s*\n", body) if "`ACPConfig`" in p and "字符串表示" in p)
+    )
+    assert "`auth_method_id`" in paragraph
+
+
+@pytest.mark.parametrize("name", ["CONTRIBUTING.md", "CONTRIBUTING_CN.md"])
+def test_consumer_restart_checklist_records_shared_install_and_startup_catchup(name):
+    document = (ROOT / name).read_text(encoding="utf-8")
+    for token in ("`pip check`", "`startup catch-up`", "`rollback`"):
+        assert token in document
 
 
 @pytest.mark.parametrize("path", READMES, ids=lambda path: path.name)

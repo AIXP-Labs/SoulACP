@@ -80,7 +80,7 @@ python -m pip install -e ".[dev]"
 python -c "import importlib.metadata as m, soulacp; print(m.version('soulacp')); print(soulacp.__version__)"
 ```
 
-验收本 checkout 时两者应为 `0.2.3`。若不一致，可在本机检查
+验收本 checkout 时两者应为 `0.2.4`。若不一致，可在本机检查
 `soulacp.__file__`，分享诊断前须脱敏个人路径。Editable 安装、wheel 和下游
 锁文件是不同的安装来源；替换磁盘文件不会重载已经运行的 worker。
 
@@ -208,7 +208,7 @@ print("Installed:", installed)
 npm install -g "@agentclientprotocol/claude-agent-acp@>=0.86.0" "@agentclientprotocol/codex-acp@>=2.1.1"
 ```
 
-版本范围须保留引号，避免 shell 把 `>` 当作重定向。这些范围与 SoulACP 0.2.3
+版本范围须保留引号，避免 shell 把 `>` 当作重定向。这些范围与 SoulACP 0.2.4
 的安装提示一致，不是精确锁版，也不代表所有后续 bridge/模型组合均已验收。
 Bridge 可能自带 CLI/runtime，因此只升级全局 `claude` 或 `codex` 不能证明
 bridge 实际使用了哪个 runtime。应核对已安装 bridge 的包元数据和其报告的
@@ -245,7 +245,8 @@ asyncio.run(main())
 
 ### Gemini
 
-**认证警示：**适配器在连接时请求`authMethods[0]`。Gemini CLI `0.51.0`
+**认证警示：**默认 `auth_method_id=None` 时，适配器在连接时请求`authMethods[0]`。
+如需主动指定准确方法，见[显式认证选择](#显式认证选择)。Gemini CLI `0.51.0`
 若从已保存的认证方式切换到另一种方式，会在刷新成功之前调用
 `clearCachedCredentialFile`。请先审阅
 [上游实现](https://raw.githubusercontent.com/google-gemini/gemini-cli/v0.51.0/packages/cli/src/acp/acpRpcDispatcher.ts)，
@@ -531,6 +532,35 @@ session load/resume 在 Agent 未声明 `loadSession` 或
 会告警一次，并按 adapter/executable 缓存结果；后续 client 跳过该请求。
 跳过不受支持的 RPC 不证明请求的模型已经选中。
 
+### 显式认证选择
+
+`auth_method_id`仅为可选构造参数，不是密码或token。下方占位值必须替换为Agent
+实际声明的准确方法ID。`None`保留各适配器原有行为，包括适用时的首项认证；
+这不会消除旧默认行为对原生状态的风险。
+
+```python
+from soulacp import ACPConfig
+
+config = ACPConfig(
+    provider="gemini",
+    model="gemini-acp/default",
+    auth_method_id="advertised-method-id",
+)
+```
+
+显式方法必须唯一匹配。选择绑定原Provider，并由pool和client保存快照。
+未支持、缺失或有歧义的方法在认证前失败；旧式`cursor-cli`拒绝该配置。
+所有原生ACP适配器均在创建session前应用它，不改写ACP正文。
+
+`ACPAuthenticationError`在显式认证被拒或结果不明时阻止自动重试及Provider
+fallback。原始诊断只保留在私有`cause`中。认证发送前的传输重试保留原有上限，
+但显式选择不会转给其他Provider。手工`authenticate()`不能在同一显式绑定的
+client上选择不同方法。
+
+即使选定方法匹配，认证仍可能改变原生凭据状态。该选项不隔离凭据，也不授权
+业务操作。真实Provider资格与合成协议测试分开；Gemini自然编辑/拒绝资格仍未
+取得。没有环境变量选择该选项，也不会读取凭据文件来推断它。
+
 ## 配置
 
 ### 环境变量
@@ -654,8 +684,8 @@ config = ACPConfig(
 `extra_args` 会直接追加到子进程 argv，不经过 shell 展开，本地进程查看工具可见，
 因此绝不能放入凭据。`extra_env` 会合并到子进程环境并覆盖同名 key；两者都应视为
 可信配置，不要无差别记录到日志。
-`ACPConfig` 的字符串表示会省略工作目录、additional root、MCP 定义、额外参数和
-环境覆盖，降低它们被意外写入日志的风险；这些字段仍可直接访问，必须继续按敏感配置处理。
+`ACPConfig` 的字符串表示会省略工作目录、additional root、MCP 定义、额外参数、
+环境覆盖和`auth_method_id`，降低它们被意外写入日志的风险；这些字段仍可直接访问，必须继续按敏感配置处理。
 为兼容 CLI 认证，provider 与 ACP terminal
 子进程默认继承父进程环境。设置 `inherit_parent_env=False`（或
 `ACP_INHERIT_PARENT_ENV=false`）后，只保留有限的运行时、路径与 locale allowlist；
@@ -858,6 +888,7 @@ SoulACP agent 子进程以当前 OS 账户运行，并默认继承父进程环�
 
 | 异常 | 调用方责任 |
 |------|------------|
+| `ACPAuthenticationError` | 显式认证失败或结果不明，不自动重试、改选方法或切换 provider；原始`cause`保持私有。失败不证明凭据状态未改变。 |
 | `ACPRequestOutcomeUnknownError` | 执行可能已开始，不自动重放；先核实外部副作用。 |
 | `ACPPartialResponseError` | `partial_output`是未完成的原始内容，不是成功答案或可公开诊断。 |
 | `ACPProtocolError` | 将不合法的完成响应视为失败，原始`details`保持私有。 |
@@ -905,9 +936,9 @@ PYTHONPATH=src python -m pyright --verifytypes soulacp --ignoreexternal
 python -m bandit -q -r src/soulacp
 
 # 在全新且不存在的目录构建，不与历史发布混用
-python tools/build_release.py --outdir dist/0.2.3
-python -m twine check dist/0.2.3/soulacp-0.2.3-py3-none-any.whl dist/0.2.3/soulacp-0.2.3.tar.gz
-python tools/check_sdist.py dist/0.2.3/soulacp-0.2.3.tar.gz
+python tools/build_release.py --outdir dist/0.2.4
+python -m twine check dist/0.2.4/soulacp-0.2.4-py3-none-any.whl dist/0.2.4/soulacp-0.2.4.tar.gz
+python tools/check_sdist.py dist/0.2.4/soulacp-0.2.4.tar.gz
 ```
 
 仓库hook使用独立Python >=3.11的[hook环境](CONTRIBUTING_CN.md#独立仓库-hook-环境)。
@@ -976,7 +1007,7 @@ AIXP Labs 开发并维护以下核心项目：
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.3. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.4. www.soulacp.dev
 
 <a id="values-philosophy"></a>
 

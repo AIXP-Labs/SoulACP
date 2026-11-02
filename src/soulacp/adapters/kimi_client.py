@@ -53,7 +53,7 @@ class KimiACPClient(ACPClientBase):
         auth_methods = result.get("authMethods", [])
         if not isinstance(auth_methods, list):
             raise ACPProtocolError("Kimi initialize authMethods must be an array")
-        if auth_methods:
+        if auth_methods and self._auth_method_id is None:
             first_method = auth_methods[0]
             if not isinstance(first_method, dict):
                 raise ACPProtocolError("Kimi initialize authMethods entries must be objects")

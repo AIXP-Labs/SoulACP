@@ -80,7 +80,7 @@ Check the interpreter, distribution metadata, and imported module together:
 python -c "import importlib.metadata as m, soulacp; print(m.version('soulacp')); print(soulacp.__version__)"
 ```
 
-Both values should be `0.2.3` when validating this checkout. Locally inspect
+Both values should be `0.2.4` when validating this checkout. Locally inspect
 `soulacp.__file__` if the values differ; redact personal paths before sharing
 diagnostics. Editable installs, wheels, and downstream lock files are distinct
 installation sources. Replacing files does not reload an already-running worker.
@@ -212,7 +212,7 @@ npm install -g "@agentclientprotocol/claude-agent-acp@>=0.86.0" "@agentclientpro
 ```
 
 Keep the quotes so the shell does not treat `>` as a redirect. These ranges
-match SoulACP 0.2.3's installation hints; they are not exact version pins or
+match SoulACP 0.2.4's installation hints; they are not exact version pins or
 qualification of every later bridge/model combination. A bridge can bundle its
 own CLI/runtime, so upgrading a global `claude` or `codex` alone does not prove
 which runtime the bridge will use. Check the bridge's installed package metadata
@@ -250,7 +250,9 @@ asyncio.run(main())
 
 ### Gemini
 
-**Authentication warning:** The adapter requests `authMethods[0]` during connection.
+**Authentication warning:** When `auth_method_id=None` (the default), the adapter
+requests `authMethods[0]` during connection. For an opt-in exact choice, see
+[Explicit Authentication Selection](#explicit-authentication-selection).
 In Gemini CLI `0.51.0`, switching from its saved authentication method calls
 `clearCachedCredentialFile` before refresh succeeds. Review the
 [upstream implementation](https://raw.githubusercontent.com/google-gemini/gemini-cli/v0.51.0/packages/cli/src/acp/acpRpcDispatcher.ts),
@@ -565,6 +567,40 @@ cache the result for the same adapter/executable; later clients skip the
 unsupported request. Skipping an unsupported RPC does not verify that the
 requested model was selected.
 
+### Explicit Authentication Selection
+
+`auth_method_id` is an optional constructor-only selection, not a password or token.
+The placeholder below must be replaced with an exact method ID advertised by the
+agent. `None` keeps each adapter's existing behavior, including advertised-first
+authentication where applicable; it does not remove that default's native-state risk.
+
+```python
+from soulacp import ACPConfig
+
+config = ACPConfig(
+    provider="gemini",
+    model="gemini-acp/default",
+    auth_method_id="advertised-method-id",
+)
+```
+
+The explicit method must match uniquely. The choice is bound to the original
+provider and snapshotted by pools and clients. Unsupported, missing or ambiguous
+methods fail before authentication; legacy `cursor-cli` rejects this option.
+All native ACP adapters apply it before session creation, without changing ACP content.
+
+`ACPAuthenticationError` stops automatic retry and provider fallback after an
+explicit authentication rejection or uncertain outcome. Original diagnostics remain
+private in `cause`. Pre-authentication transport retries retain their existing bound,
+but an explicit choice never transfers to another provider. Manual `authenticate()`
+cannot select a different method on the same explicitly bound client.
+
+Authentication may still change native credential state, even when the selected
+method matches. This option does not isolate credentials or authorize business
+actions. Real-provider qualification is separate from synthetic protocol tests;
+Gemini natural editing/refusal qualification remains unverified. No environment
+variable selects this option, and no credential files are read to infer it.
+
 ## Configuration
 
 ### Environment Variables
@@ -702,7 +738,7 @@ visible to local process-inspection tools. Never put credentials in it.
 `extra_env` is merged into the subprocess environment and overrides duplicate
 keys. Treat both as trusted configuration; do not log them indiscriminately.
 `ACPConfig` representations omit the working directory, additional roots, MCP
-definitions, extra arguments, and environment overrides to reduce accidental
+definitions, extra arguments, environment overrides, and `auth_method_id` to reduce accidental
 log exposure. The fields remain directly accessible and must still be handled
 as sensitive configuration.
 Provider and ACP terminal subprocesses inherit the parent environment by default
@@ -968,6 +1004,7 @@ whether external side effects occurred:
 
 | Error | Caller responsibility |
 |-------|-----------------------|
+| `ACPAuthenticationError` | Explicit authentication failed or its outcome is uncertain. Do not automatically retry, switch methods or fall back to another provider; keep the original `cause` private. Failure does not prove credential state was unchanged. |
 | `ACPRequestOutcomeUnknownError` | Execution may have started. Do not automatically replay; reconcile external effects first. |
 | `ACPPartialResponseError` | `partial_output` is incomplete original content, not a successful answer or public diagnostic. |
 | `ACPProtocolError` | Treat malformed completion as failure; keep raw `details` private. |
@@ -1015,9 +1052,9 @@ PYTHONPATH=src python -m pyright --verifytypes soulacp --ignoreexternal
 python -m bandit -q -r src/soulacp
 
 # Build into a new, nonexistent output directory; do not mix historical releases
-python tools/build_release.py --outdir dist/0.2.3
-python -m twine check dist/0.2.3/soulacp-0.2.3-py3-none-any.whl dist/0.2.3/soulacp-0.2.3.tar.gz
-python tools/check_sdist.py dist/0.2.3/soulacp-0.2.3.tar.gz
+python tools/build_release.py --outdir dist/0.2.4
+python -m twine check dist/0.2.4/soulacp-0.2.4-py3-none-any.whl dist/0.2.4/soulacp-0.2.4.tar.gz
+python tools/check_sdist.py dist/0.2.4/soulacp-0.2.4.tar.gz
 ```
 
 Repository hooks use the separate Python >=3.11
@@ -1090,7 +1127,7 @@ This software is **experimental** and provided for **research and educational pu
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.3. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.4. www.soulacp.dev
 
 <a id="alignment-philosophy"></a>
 

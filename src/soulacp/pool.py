@@ -13,8 +13,14 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from soulacp._async import wait_for_owned
 from soulacp.config import ACPConfig, _require_valid_unicode
-from soulacp.errors import ACPPoolAcquireTimeoutError, ACPPoolClosedError, ACPPoolError, ACPResumeError
-from soulacp.privacy import exception_summary
+from soulacp.errors import (
+    ACPAuthenticationError,
+    ACPPoolAcquireTimeoutError,
+    ACPPoolClosedError,
+    ACPPoolError,
+    ACPResumeError,
+)
+from soulacp.privacy import _raise_private_cause, exception_summary
 from soulacp.retry import retry_async
 from soulacp.telemetry import PoolTelemetry
 
@@ -1009,6 +1015,12 @@ class ACPConnectionPool:
 
                 disconnect_task = asyncio.create_task(_clean_failed_startup())
                 await self._await_owned_cleanup(disconnect_task)
+                if (
+                    not isinstance(startup_error, (asyncio.CancelledError, ACPAuthenticationError))
+                    and self._config.auth_method_id is not None
+                    and getattr(client, "_explicit_auth_attempted", False)
+                ):
+                    _raise_private_cause(ACPAuthenticationError(), startup_error)
                 raise
 
         return await retry_async(

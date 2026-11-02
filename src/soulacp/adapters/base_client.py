@@ -33,6 +33,7 @@ from soulacp.environment import (
     update_subprocess_environment,
 )
 from soulacp.errors import (
+    ACPAuthenticationError,
     ACPPartialResponseError,
     ACPPromptTimeoutError,
     ACPProtocolError,
@@ -598,6 +599,10 @@ class ACPClientBase(ABC):
 
     def __init__(self, config: ACPConfig) -> None:
         self.config = config
+        self._auth_method_id = config.auth_method_id
+        self._auth_provider = config.provider
+        self._explicit_auth_attempted = False
+        self._explicit_auth_succeeded = False
         self.process: asyncio.subprocess.Process | None = None
         self._command_identity: str | None = None
         self._session_id: str | None = None
@@ -716,6 +721,8 @@ class ACPClientBase(ABC):
                 pass
             except BaseException as cleanup_exc:
                 logger.error("ACP startup-timeout cleanup failed: %s", exception_summary(cleanup_exc))
+            if self._auth_method_id is not None and self._explicit_auth_attempted:
+                _raise_private_cause(ACPAuthenticationError(), exc)
             raise ConnectionError(f"ACP startup exceeded {self.config.timeout_connect:g}s") from exc
         except asyncio.CancelledError as cancelled:
             try:
@@ -750,6 +757,7 @@ class ACPClientBase(ABC):
         # A reconnect owns a new logical transport.  Never carry session or
         # diagnostic state over from the previous subprocess.
         self._reset_protocol_state()
+        self._explicit_auth_attempted = False
         await self._prepare_host_services()
         cmd = self._get_acp_command()
         if not cmd:
@@ -879,6 +887,7 @@ class ACPClientBase(ABC):
         self.agent_capabilities = {}
         self.agent_info = None
         self.auth_methods = []
+        self._explicit_auth_succeeded = False
         self._clear_session_state()
         self._permission_turn.active = False
         self._permission_turn = _PermissionTurnState()
@@ -941,6 +950,7 @@ class ACPClientBase(ABC):
 
     async def authenticate(self, method_id: str) -> dict[str, Any]:
         """Authenticate with one method advertised during initialization."""
+        self._check_explicit_authentication(method_id)
         if not isinstance(method_id, str) or not method_id:
             raise ValueError("method_id must be a non-empty string")
         _require_valid_unicode(method_id, "method_id")
@@ -952,6 +962,33 @@ class ACPClientBase(ABC):
             timeout=self.config.timeout_connect,
         )
         return self._validate_object_result(result, method="authenticate")
+
+    def _check_explicit_authentication(self, method_id: object) -> None:
+        if self._auth_method_id is None:
+            return
+        if self.config.provider != self._auth_provider or method_id != self._auth_method_id:
+            raise ACPAuthenticationError()
+        matches = [method for method in self.auth_methods if method.get("id") == method_id]
+        if len(matches) != 1 or len({method["id"] for method in self.auth_methods}) != len(self.auth_methods):
+            raise ACPAuthenticationError()
+
+    async def _authenticate_explicitly(self) -> None:
+        if self._auth_method_id is not None:
+            self._check_explicit_authentication(self._auth_method_id)
+            await self.authenticate(self._auth_method_id)
+
+    def _check_authentication_rpc(self, method: str, params: dict) -> None:
+        if self._auth_method_id is None:
+            return
+        if self.config.provider != self._auth_provider:
+            raise ACPAuthenticationError()
+        if method == "authenticate":
+            self._check_explicit_authentication(params.get("methodId"))
+        elif (
+            method in {"session/new", "session/load", "session/resume", "session/prompt"}
+            and not self._explicit_auth_succeeded
+        ):
+            raise ACPAuthenticationError()
 
     async def logout(self) -> dict[str, Any]:
         """End authenticated state when the agent advertises ``auth.logout``."""
@@ -1859,6 +1896,10 @@ class ACPClientBase(ABC):
             self._validate_session_list_result(result)
         elif method in {"authenticate", "logout", "session/delete", "session/close", "session/set_mode"}:
             self._validate_object_result(result, method=method)
+            if method == "authenticate" and self._auth_method_id is not None:
+                self._explicit_auth_succeeded = True
+            elif method == "logout":
+                self._explicit_auth_succeeded = False
         if method in {"session/new", "session/load", "session/resume"}:
             if not isinstance(result, dict):
                 raise ACPProtocolError(f"{method} response result must be an object")
@@ -2186,6 +2227,10 @@ class ACPClientBase(ABC):
 
     async def _authenticate_if_advertised(self, initialize_result: dict, *, agent_name: str) -> bool:
         """Try the first advertised auth method without masking transport faults."""
+        if self._auth_method_id is not None:
+            if not self._explicit_auth_succeeded:
+                raise ACPAuthenticationError()
+            return True
         auth_methods = initialize_result.get("authMethods", [])
         if not auth_methods:
             return False
@@ -2452,6 +2497,8 @@ class ACPClientBase(ABC):
         if not self.is_connected:
             raise ConnectionError("ACP not connected")
 
+        self._check_authentication_rpc(method, params)
+
         params = self._normalize_rpc_params(method, params)
         params = self._apply_configured_session_params(method, params)
 
@@ -2495,6 +2542,9 @@ class ACPClientBase(ABC):
                 loop = asyncio.get_running_loop()
                 deadline = loop.time() + timeout
                 request_write_started = True
+                if method == "authenticate" and self._auth_method_id is not None:
+                    self._explicit_auth_attempted = True
+                    self._explicit_auth_succeeded = False
                 stdin.write(msg)
                 remaining = deadline - loop.time()
                 if remaining <= 0:
@@ -2508,34 +2558,45 @@ class ACPClientBase(ABC):
                 if request_write_started:
                     await self._invalidate_uncertain_rpc_transport(method)
                 raise
-            except asyncio.TimeoutError:
+            except asyncio.TimeoutError as exc:
                 await self._notify_request_cancel(mid)
                 if request_write_started:
                     await self._invalidate_uncertain_rpc_transport(method)
                 if span is not None:
                     with suppress(Exception):
                         span.set_attribute("acp.timeout", True)
+                if method == "authenticate" and self._auth_method_id is not None:
+                    _raise_private_cause(ACPAuthenticationError(), exc)
                 raise
             except RPCError as rpc_err:
                 if span is not None:
                     with suppress(Exception):
                         span.set_attribute("acp.code", rpc_err.code if rpc_err.code is not None else 0)
+                if method == "authenticate" and self._auth_method_id is not None:
+                    self._pool_reusable = False
+                    _raise_private_cause(ACPAuthenticationError(), rpc_err)
                 raise
-            except ACPResponseError:
+            except ACPResponseError as exc:
                 if request_write_started:
                     await self._invalidate_uncertain_rpc_transport(method)
+                if method == "authenticate" and self._auth_method_id is not None:
+                    _raise_private_cause(ACPAuthenticationError(), exc)
                 raise
             except Exception as exc:
                 if request_write_started:
                     await self._invalidate_uncertain_rpc_transport(method)
                 if prompt_write_started:
                     _raise_private_cause(ACPRequestOutcomeUnknownError(exc), exc)
+                if method == "authenticate" and self._auth_method_id is not None:
+                    _raise_private_cause(ACPAuthenticationError(), exc)
                 raise
             finally:
                 self._finish_rpc_lifecycle(transition_id, previous_session_state, transition_succeeded)
                 _finalize_rpc_future(future)
                 self._pending.pop(mid, None)
                 self._inflight.pop(mid, None)
+            if method == "initialize":
+                await self._authenticate_explicitly()
             return result
 
     @staticmethod

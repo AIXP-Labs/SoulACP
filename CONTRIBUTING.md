@@ -116,7 +116,7 @@ and session-cache locations, but are not a substitute for reviewing staged files
 
 ### Release Identity and Privacy
 
-For the current **0.2.3** source target:
+For the current **0.2.4** source target:
 
 1. Check `pyproject.toml`, `src/soulacp/meta.py`, the root `soulacp` entry in
    `uv.lock`, current documentation footers, and the current changelog entry.
@@ -127,7 +127,7 @@ For the current **0.2.3** source target:
    for a subsequent build. `make clean` remains an explicitly destructive action:
 
    ```bash
-   python tools/build_release.py --outdir dist/0.2.3
+   python tools/build_release.py --outdir dist/0.2.4
    # Alternatively: make build DIST_DIR=dist/another-new-directory
    ```
 
@@ -147,6 +147,15 @@ For the current **0.2.3** source target:
    identity. A wheel install is not a real-provider integration test. Review
    downstream requirements and lock files independently; do not silently
    upgrade or restart a consuming application's active workers.
+
+   Before an authorized consumer restart, identify the actual interpreter and
+   shared installation scope, compare `pip check` before/after, and record any
+   pre-existing dependency debt separately. Inspect pending tasks and existing
+   `startup catch-up` behavior; zero active requests does not prove that startup
+   will make no model calls or append no records. Do not disable policies merely
+   to keep database hashes unchanged. Preserve new legitimate records; SDK
+   `rollback` is not permission to overwrite live databases with old snapshots.
+
 7. Upload only explicitly selected files after the maintainer's release decision;
    do not upload `dist/*` indiscriminately. Documentation examples do not themselves
    authorize publication. Share only reviewed, minimal release evidence, never
@@ -191,4 +200,4 @@ Copyright 2026 AIXP Labs AIXP.dev | SoulACP.dev
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.3. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.4. www.soulacp.dev

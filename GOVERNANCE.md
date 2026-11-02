@@ -94,7 +94,7 @@ SoulACP follows Semantic Versioning:
 Pre-1.0 releases may refine APIs more quickly, but breaking changes still
 require explicit changelog and migration guidance.
 
-The current source target is **0.2.3**. A patch must preserve the documented
+The current source target is **0.2.4**. A patch must preserve the documented
 public API and safety policy. Source metadata, installed metadata, import
 location, distribution contents, and downstream lock files are separate
 identities to verify. Historical changelog entries retain their own versions;
@@ -124,6 +124,16 @@ authentication-selection policy. Authentication changes need a separate caller
 control and compatibility review; documentation warnings are not an implementation
 or evidence that a CLI's credentials were never changed.
 
+### 0.2.4 Explicit Authentication
+
+The opt-in `auth_method_id` contract binds an exact advertised method to its
+original provider. Explicit failures or unknown authentication outcomes do not
+authorize another method, automatic reauthentication, or provider fallback.
+Unconfigured callers retain their existing adapter behavior and risks. Native
+authentication may still change credential state; method selection is neither
+credential isolation nor human business authorization. Provider qualification
+must distinguish synthetic protocol peers from actual authenticated CLI runs.
+
 ## Axiom 0
 
 Human Sovereignty and Wellbeing is the project's immutable guiding constraint.
@@ -132,4 +142,4 @@ testable safety and compatibility contracts described above.
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.3. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.4. www.soulacp.dev

@@ -24,6 +24,7 @@ from soulacp.binary import find_cursor_binary
 from soulacp.config import ACPConfig, _model_id_for_provider, _require_valid_unicode
 from soulacp.environment import build_subprocess_environment, update_subprocess_environment
 from soulacp.errors import (
+    ACPAuthenticationError,
     ACPPartialResponseError,
     ACPPromptTimeoutError,
     ACPProtocolError,
@@ -53,6 +54,8 @@ class CursorCLIClient:
     """
 
     def __init__(self, config: ACPConfig) -> None:
+        if config.auth_method_id is not None:
+            raise ACPAuthenticationError()
         self.config = config
         self._binary: str | None = None
         self._session_id: str | None = None

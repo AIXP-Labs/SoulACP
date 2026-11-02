@@ -108,7 +108,7 @@ Windows 使用 `py -3.11 -m venv .venv-hooks` 创建环境，将上述解释器�
 
 ### 发布身份与隐私
 
-当前源码目标为 **0.2.3**：
+当前源码目标为 **0.2.4**：
 
 1. 核对 `pyproject.toml`、`src/soulacp/meta.py`、`uv.lock` 中本项目条目、
    当前文档页脚和当前 CHANGELOG 条目。不要改写历史版本，也不要把日期当上传回执。
@@ -117,7 +117,7 @@ Windows 使用 `py -3.11 -m venv .venv-hooks` 创建环境，将上述解释器�
    `DIST_DIR`另选新目录。`make clean`仍是需显式选择的破坏性清理：
 
    ```bash
-   python tools/build_release.py --outdir dist/0.2.3
+   python tools/build_release.py --outdir dist/0.2.4
    # 或：make build DIST_DIR=dist/another-new-directory
    ```
 
@@ -131,6 +131,12 @@ Windows 使用 `py -3.11 -m venv .venv-hooks` 创建环境，将上述解释器�
    `soulacp.__file__`。源码测试会优先使用 `src`，不能替代分发验收；私人路径不得外泄。
 6. 如实记录测试、失败、skip、平台范围和产物身份。安装 wheel 不等于真实 provider
    集成验收。下游依赖及 lock 独立核对，不静默升级或重启消费应用的活动 worker。
+
+   获准重启消费应用前，核实真实解释器和共享安装影响，比较升级前后`pip check`，
+   既有依赖债务单列。检查待执行任务及原有`startup catch-up`行为；活动请求为零
+   不证明启动时没有模型调用或新增记录。不得只为数据库摘要不变而禁用策略；保留
+   合法新增记录。SDK 的`rollback`不授权用旧快照覆盖 live 数据库。
+
 7. 经维护者发布裁定后，仅上传明确选择的文件，不无差别上传 `dist/*`。文档示例
    本身不是发布授权；对外只提供审阅过的最小发布证据，不能包含凭据或原始私人诊断。
 
@@ -167,4 +173,4 @@ Copyright 2026 AIXP Labs AIXP.dev | SoulACP.dev
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.3. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.4. www.soulacp.dev

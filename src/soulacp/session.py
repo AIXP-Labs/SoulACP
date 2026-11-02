@@ -14,6 +14,7 @@ from weakref import WeakValueDictionary
 from soulacp.adapters.base_client import RPCError
 from soulacp.config import FALLBACK_MAP, ACPConfig, _require_valid_unicode, resolve_client_class, resolve_provider
 from soulacp.errors import (
+    ACPAuthenticationError,
     ACPPoolAcquireTimeoutError,
     ACPPoolClosedError,
     ACPRequestOutcomeUnknownError,
@@ -234,7 +235,7 @@ class ManagedSession:
                     yield text
                 return  # success
 
-            except (ACPPoolAcquireTimeoutError, ACPPoolClosedError):
+            except (ACPAuthenticationError, ACPPoolAcquireTimeoutError, ACPPoolClosedError):
                 # Capacity and lifecycle pressure are local pool decisions, not
                 # transport faults. Retrying or switching providers hides load.
                 raise
@@ -319,6 +320,8 @@ class ManagedSession:
                 break
 
         # Fallback to alternate provider
+        if self._config.auth_method_id is not None and primary_err is not None:
+            raise primary_err
         if self._config.enable_fallback and primary_err:
             fallback_model = FALLBACK_MAP.get(self.provider)
             if fallback_model:

@@ -13,6 +13,8 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
+from soulacp.privacy import _raise_private_cause
+
 if TYPE_CHECKING:
     from soulacp.adapters.protocol import ACPClient
 
@@ -569,6 +571,16 @@ class ACPConfig:
     mapping or copy real credentials into examples or issue reports.
     """
 
+    auth_method_id: str | None = field(default=None, repr=False)
+    """Opt-in exact advertised authentication method, bound to this provider.
+
+    None preserves adapter defaults. Explicit failures never authorize another
+    method or provider. Authentication may still change native credential state.
+    This field is deliberately not loaded from process environment variables.
+    """
+
+    _auth_provider: str | None = field(default=None, repr=False)
+
     def __post_init__(self) -> None:
         integer_fields = {
             "pool_size": self.pool_size,
@@ -612,6 +624,18 @@ class ACPConfig:
         ):
             raise ValueError("provider must be a non-empty string")
         _require_valid_unicode(self.provider, "provider")
+        if self.auth_method_id is not None:
+            try:
+                _require_non_empty_string(self.auth_method_id, "auth_method_id")
+            except ValueError as exc:
+                _raise_private_cause(
+                    ValueError("auth_method_id must be a non-empty valid Unicode string without NUL"), exc
+                )
+            if self._auth_provider is not None and self._auth_provider != self.provider:
+                raise ValueError("auth_method_id is bound to its original provider")
+            self._auth_provider = self.provider
+        else:
+            self._auth_provider = None
         if (
             not isinstance(self.model, str)
             or not self.model

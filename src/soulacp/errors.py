@@ -11,6 +11,19 @@ class ACPError(Exception):
     """Base class for soulacp-owned operational errors."""
 
 
+class ACPAuthenticationError(ACPError):
+    """Explicit authentication failed; retry or fallback requires caller action.
+
+    Original errors, when present, are retained in the private ``cause`` field.
+    Method IDs, provider messages and credential material are not public strings.
+    """
+
+    cause: BaseException | None = None
+
+    def __init__(self) -> None:
+        super().__init__("Explicit ACP authentication failed; automatic retry and fallback are disabled")
+
+
 class ACPPoolError(ACPError):
     """Base class for connection-pool failures."""
 
