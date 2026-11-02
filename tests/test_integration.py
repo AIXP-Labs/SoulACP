@@ -219,13 +219,18 @@ def test_session_resume(config, client_class):
                 assert sid1
                 _ = await client1.query("Reply 'hi'.")
 
+            # Release the original transport before transferring the session.
+            await pool.close_all()
+
             # 2. Second connection: try to resume sid1
             from soulacp.adapters.claude_client import ClaudeACPClient
 
             client2 = ClaudeACPClient(config)
-            await client2.connect()
-            ok = await client2.resume(sid1)
-            await client2.disconnect()
+            try:
+                await client2.connect()
+                ok = await client2.resume(sid1)
+            finally:
+                await client2.disconnect()
 
             # resume may return False if claude-agent-acp doesn't keep
             # cross-process state. The test verifies the call doesn't crash.

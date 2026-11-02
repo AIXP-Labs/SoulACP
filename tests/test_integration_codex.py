@@ -235,15 +235,20 @@ def test_session_resume(config, client_class):
                 # Use it briefly so codex-acp records it
                 _ = await client1.query("Reply 'hi'.")
 
+            # Release the original transport before transferring the session.
+            await pool.close_all()
+
             # 2. Second connection: try to resume sid1
             #    This calls resume() on the client which sends session/load.
             #    If it succeeds without raising, the RPC is supported.
             from soulacp.adapters.codex_client import CodexACPClient
 
             client2 = CodexACPClient(config)
-            await client2.connect()
-            ok = await client2.resume(sid1)
-            await client2.disconnect()
+            try:
+                await client2.connect()
+                ok = await client2.resume(sid1)
+            finally:
+                await client2.disconnect()
 
             # resume may return False if codex-acp version doesn't keep
             # cross-process state — that's acceptable. The test verifies

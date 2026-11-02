@@ -519,6 +519,17 @@ async def main():
 asyncio.run(main())
 ```
 
+Leaving a `pool.acquire()` context releases the lease; a reusable transport can
+remain connected in the pool. Reusing that session within the same pool is
+normal and does not require `close_all()` after every request.
+
+Before a separately created client takes over the same session, finish the old
+owner's work and explicitly close its transport. In a single-session integration
+test, call `pool.close_all()` before creating the receiving client; protect that
+client's connect/resume sequence with `try`/`finally` and await `disconnect()`
+even if it fails. Do not close an application's entire shared pool just to hand
+off one session, or bypass an active-owner rejection.
+
 Native `ACPClientBase` adapters retain the agent's advertised capabilities,
 implementation info, authentication methods, and current session config in
 `agent_capabilities`, `agent_info`, `auth_methods`, and
@@ -1035,6 +1046,9 @@ ManagedSession (high-level API)
 # Provider CLI and model calls are skipped unless explicitly enabled
 python -m pytest tests/ -W error -v --cov=soulacp --cov-branch --cov-report=term
 
+# Offline ownership-transfer regressions; no authenticated CLI calls
+python -m pytest tests/test_resume_test_lifecycle.py -W error -v
+
 # Integration tests (requires installed and authenticated CLIs)
 python -m pytest --run-integration tests/test_integration.py -W error -v          # Claude Code
 python -m pytest --run-integration tests/test_integration_gemini.py -W error -v   # Gemini
@@ -1070,6 +1084,27 @@ installed-wheel tests, and authenticated provider tests are separate results.
 
 Files named `test_integration*`, `test_spike_*`, and `test_stress_*` require
 `--run-integration`; the default suite intentionally skips them.
+
+`tests/test_resume_test_lifecycle.py` covers ten offline cases: Claude and Codex,
+each with success, unavailable session, protocol failure, connection failure and
+initial-prompt failure. It checks that the old owner is closed before creating
+the receiving client, the receiver is cleaned up, and errors are not converted
+into success. These are synthetic regressions, not authenticated provider calls.
+
+A boolean-only resume assertion establishes only its structural test contract.
+Record whether `resume()` actually returned `True` or `False`; require an
+additional post-resume context assertion before claiming full history retention.
+Native `allow_once`/`reject_once` evidence, Host function authorization and complete
+business-output quality are separate qualifications. A successful Claude run
+does not close an unresolved Codex failure.
+
+On 2026-11-02, bounded isolated runs of the published `0.2.4` runtime with the
+corrected test lifecycle passed seven Claude SDK and four SoulBot Host cases
+(11/11). The separate Codex run passed seven SDK and two Host cases, failed one
+Host streaming exact-output assertion, and left two Host tool cases unrun. These
+are scoped results, not qualification of every provider, model, authentication
+path or full business workflow. Post-release test/documentation changes do not
+alter the published `0.2.4` archives.
 
 Source tests select this checkout's `src` through `tests/conftest.py`; they do
 not by themselves validate an installed wheel. See the

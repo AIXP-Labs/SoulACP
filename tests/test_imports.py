@@ -1,7 +1,9 @@
 """Test that all soulacp modules import correctly."""
 
+import re
 from pathlib import Path
 
+import pytest
 import tomli
 
 
@@ -13,6 +15,67 @@ def _project_metadata() -> dict:
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[1]
+
+
+def _assert_changelog_release_structure(changelog: str, version: str) -> None:
+    pending_heading = "## [Unreleased]"
+    release_heading = f"## [{version}]"
+    assert changelog.count(pending_heading) == 1
+    assert changelog.count(release_heading) == 1
+    _, _, after_pending = changelog.partition(pending_heading + "\n")
+    pending, separator, _ = after_pending.partition(release_heading)
+    assert separator, "current source version must follow Unreleased"
+    assert "## [" not in pending, "another release precedes the current source version"
+    pending = pending.strip()
+    assert pending, "Unreleased must contain a placeholder or change entries"
+    if pending == "No changes yet.":
+        return
+    assert "No changes yet." not in pending, "empty placeholder conflicts with pending changes"
+    sections = re.split(r"(?m)^### [^\n]+\n", pending + "\n")
+    assert len(sections) > 1, "pending changes require named sections"
+    assert all(re.search(r"(?m)^- \S", body) for body in sections[1:]), "pending change section is empty"
+
+
+@pytest.mark.parametrize(
+    "pending", ["No changes yet.", "### Fixed\n- Correct test ownership.\n\n### Documentation\n- Explain scope."]
+)
+def test_changelog_structure_accepts_empty_or_documented_pending_changes(pending):
+    _assert_changelog_release_structure(
+        f"# Changelog\n\n## [Unreleased]\n\n{pending}\n\n## [0.2.4] - Unreleased\n", "0.2.4"
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing_pending",
+        "duplicate_pending",
+        "missing_current",
+        "duplicate_current",
+        "reversed",
+        "empty_pending",
+        "stale_placeholder",
+        "unnamed_changes",
+        "empty_section",
+        "intervening_release",
+    ],
+)
+def test_changelog_structure_rejects_missing_conflicting_or_reordered_entries(mutation):
+    document = "# Changelog\n\n## [Unreleased]\n\n### Fixed\n- Correct test ownership.\n\n## [0.2.4] - Unreleased\n"
+    changes = {
+        "missing_pending": document.replace("## [Unreleased]\n", ""),
+        "duplicate_pending": "## [Unreleased]\n" + document,
+        "missing_current": document.replace("## [0.2.4]", "## [0.2.3]"),
+        "duplicate_current": document + "\n## [0.2.4]\n",
+        "reversed": "## [0.2.4]\n\n## [Unreleased]\n\n### Fixed\n- Item.\n",
+        "empty_pending": document.replace("### Fixed\n- Correct test ownership.\n", ""),
+        "stale_placeholder": document.replace("### Fixed", "No changes yet.\n\n### Fixed"),
+        "unnamed_changes": document.replace("### Fixed\n- Correct test ownership.", "Pending changes."),
+        "empty_section": document.replace("### Fixed", "### Documentation\n\n### Fixed"),
+        "intervening_release": document.replace("## [0.2.4]", "## [0.2.3]\n\n## [0.2.4]"),
+    }
+    with pytest.raises(AssertionError):
+        _assert_changelog_release_structure(changes[mutation], "0.2.4")
 
 
 def test_package_import():
@@ -49,8 +112,7 @@ def test_release_version_is_consistent_across_owned_metadata():
     assert locked_versions == [version]
 
     changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert changelog.count(f"## [{version}]") == 1
-    assert f"## [Unreleased]\n\nNo changes yet.\n\n## [{version}]" in changelog
+    _assert_changelog_release_structure(changelog, version)
 
     footer_docs = (
         "README.md",

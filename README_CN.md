@@ -493,6 +493,14 @@ async def main():
 asyncio.run(main())
 ```
 
+退出`pool.acquire()`上下文只是释放租约，可复用的传输仍可能在池内保持连接。
+同一连接池内复用该会话是正常行为，不需要每次请求后调用`close_all()`。
+
+由独立新建的client接管同一会话前，应先完成旧拥有者的工作并显式关闭其传输。
+单会话集成测试可在创建接收client前调用`pool.close_all()`；接收client的
+connect/resume过程应由`try`/`finally`保护，即使失败也等待`disconnect()`完成。
+不要为了交接一个会话而关闭应用的整个共享连接池，也不要绕过活动拥有者拒绝。
+
 原生 `ACPClientBase` adapter 会在 `agent_capabilities`、`agent_info`、
 `auth_methods` 和 `session_config_options` 中保留 Agent 声明的能力、实现
 信息、认证方式和当前 session 配置；`session_mode_state` 跟踪声明的 mode
@@ -919,6 +927,9 @@ ManagedSession（高级 API）
 # 未显式启用时跳过 provider CLI 和模型调用
 python -m pytest tests/ -W error -v --cov=soulacp --cov-branch --cov-report=term
 
+# 离线交接回归，不调用已认证的 CLI
+python -m pytest tests/test_resume_test_lifecycle.py -W error -v
+
 # 集成测试（需要安装并认证对应 CLI）
 python -m pytest --run-integration tests/test_integration.py -W error -v          # Claude Code
 python -m pytest --run-integration tests/test_integration_gemini.py -W error -v   # Gemini
@@ -951,6 +962,22 @@ CI徽标链接到GitHub Actions，不是本checkout或本地部署的验收回�
 
 `test_integration*`、`test_spike_*` 和 `test_stress_*` 文件需要显式传入
 `--run-integration`；默认测试会有意跳过它们。
+
+`tests/test_resume_test_lifecycle.py`覆盖十项离线用例：Claude和Codex各包含
+成功、会话不可恢复、协议失败、连接失败及首次prompt失败。它核对创建接收
+client前已关闭旧拥有者、接收client得到清理、错误未被转换为成功。
+这些是合成回归，不是已认证provider的真实调用。
+
+仅要求布尔返回的恢复断言，只能证明其结构测试合同。应记录`resume()`实际返回
+`True`还是`False`；若要宣称完整历史保留，还须增加恢复后的上下文断言。
+原生`allow_once`/`reject_once`证据、Host函数授权和完整业务输出质量是不同资格。
+Claude某次验收成功，不能关闭仍未解决的Codex失败。
+
+2026-11-02，对已发布`0.2.4`运行库采用修正测试生命周期的有限隔离验收中，
+Claude SDK七项及SoulBot Host四项通过（11/11）。独立Codex场通过SDK七项及
+Host两项，一项Host流式精确输出断言失败，另两项Host工具场未启动。
+这些是限定范围的结果，不是全部provider、模型、认证路径或完整业务流程的资格。
+发布后的测试/文档修正不改变已发布`0.2.4`归档。
 
 源码测试通过 `tests/conftest.py` 优先导入本 checkout 的 `src`，不能单独证明
 已安装 wheel 正确。分发 SHA、冷安装和隐私核查见

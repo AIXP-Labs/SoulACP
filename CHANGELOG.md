@@ -9,9 +9,28 @@ Entries preserve their recorded source scope. Historical candidate/deployment
 statements describe the state when those notes were written, not the present
 publication status; use exact source/artifact release receipts for that status.
 
+Publication status, verified 2026-11-02: [0.2.4 is published on PyPI](https://pypi.org/project/soulacp/0.2.4/).
+Historical candidate labels below are retained as recorded, not as the current
+publication status. Post-release test/documentation changes are listed under
+Unreleased; the published 0.2.4 archives remain unchanged.
+
 ## [Unreleased]
 
-No changes yet.
+### Fixed
+- Close the source transport before transferring a session to a separately
+  created client in the Claude and Codex integration tests. Returning a pool
+  lease alone does not release the live connection's ownership.
+- Always disconnect the receiving client after connect/resume failure. Add ten
+  deterministic lifecycle regressions without swallowing protocol errors or
+  changing the original resume assertions.
+
+### Documentation
+- Align both READMEs on pool leases, explicit connection handoff, receiving-client
+  cleanup and the distinction between structural resume and context retention.
+- Record the separately scoped 2026-11-02 Claude/Codex acceptance outcomes without
+  claiming all providers passed or erasing the outstanding Codex streaming failure.
+- Clarify published 0.2.4 status while preserving historical candidate entries.
+  No runtime, dependency, permission-policy or published-artifact change.
 
 ## [0.2.4] - Unreleased
 
