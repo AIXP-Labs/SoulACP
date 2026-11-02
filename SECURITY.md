@@ -6,7 +6,7 @@ Security fixes are applied to the latest released minor version and the
 current `main` branch. Users should reproduce reports against the newest
 available release before submitting them.
 
-The current checkout targets 0.2.4; a source version or changelog date is not a
+The current checkout targets 0.2.5; a source version or changelog date is not a
 publication receipt. Identify the actual installed distribution and source or
 artifact revision in a report. Reproductions should use synthetic inputs rather
 than real credentials or private session data.
@@ -202,4 +202,4 @@ mitigation is available.
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.4. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.5. www.soulacp.dev

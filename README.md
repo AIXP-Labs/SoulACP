@@ -47,6 +47,13 @@ English | [简体中文](README_CN.md)
 SoulACP requires Python 3.10 or later and at least one supported agent CLI or
 ACP bridge installed and, when required, authenticated.
 
+The current source CI matrix targets standard, GIL-enabled CPython `3.10` through
+`3.15` on Windows and Ubuntu; installation permission (`>=3.10`) is not a test
+receipt. Check the CI result for the exact commit before claiming that every
+matrix job passed. Free-threaded builds, subinterpreters and experimental JIT
+modes are outside this qualification. Provider CLI integration is qualified
+separately from Python compatibility.
+
 ### Package-index release
 
 ```bash
@@ -55,6 +62,10 @@ pip install soulacp
 
 GitHub and PyPI releases use the same version and are published together.
 Use `python -m pip install soulacp` to select a Python interpreter explicitly.
+
+This checkout targets `0.2.5`, a local candidate until publication is recorded.
+`pip install soulacp` installs the latest published release, not an unpublished
+checkout. A local deployment is not a PyPI publication receipt.
 
 ### Current source
 
@@ -80,7 +91,7 @@ Check the interpreter, distribution metadata, and imported module together:
 python -c "import importlib.metadata as m, soulacp; print(m.version('soulacp')); print(soulacp.__version__)"
 ```
 
-Both values should be `0.2.4` when validating this checkout. Locally inspect
+Both values should be `0.2.5` when validating this checkout. Locally inspect
 `soulacp.__file__` if the values differ; redact personal paths before sharing
 diagnostics. Editable installs, wheels, and downstream lock files are distinct
 installation sources. Replacing files does not reload an already-running worker.
@@ -212,7 +223,7 @@ npm install -g "@agentclientprotocol/claude-agent-acp@>=0.86.0" "@agentclientpro
 ```
 
 Keep the quotes so the shell does not treat `>` as a redirect. These ranges
-match SoulACP 0.2.4's installation hints; they are not exact version pins or
+match SoulACP 0.2.5's installation hints; they are not exact version pins or
 qualification of every later bridge/model combination. A bridge can bundle its
 own CLI/runtime, so upgrading a global `claude` or `codex` alone does not prove
 which runtime the bridge will use. Check the bridge's installed package metadata
@@ -1066,9 +1077,9 @@ PYTHONPATH=src python -m pyright --verifytypes soulacp --ignoreexternal
 python -m bandit -q -r src/soulacp
 
 # Build into a new, nonexistent output directory; do not mix historical releases
-python tools/build_release.py --outdir dist/0.2.4
-python -m twine check dist/0.2.4/soulacp-0.2.4-py3-none-any.whl dist/0.2.4/soulacp-0.2.4.tar.gz
-python tools/check_sdist.py dist/0.2.4/soulacp-0.2.4.tar.gz
+python tools/build_release.py --outdir dist/0.2.5
+python -m twine check dist/0.2.5/soulacp-0.2.5-py3-none-any.whl dist/0.2.5/soulacp-0.2.5.tar.gz
+python tools/check_sdist.py dist/0.2.5/soulacp-0.2.5.tar.gz
 ```
 
 Repository hooks use the separate Python >=3.11
@@ -1105,6 +1116,23 @@ Host streaming exact-output assertion, and left two Host tool cases unrun. These
 are scoped results, not qualification of every provider, model, authentication
 path or full business workflow. Post-release test/documentation changes do not
 alter the published `0.2.4` archives.
+
+On 2026-11-02, a frozen `0.2.5` candidate completed local standard CPython
+`3.10` through `3.15` qualification on Windows and Ubuntu, including the minimum
+development stack and unpacked source distribution: eight groups per platform.
+Each Windows group recorded 1305 passes and 91 existing conditional skips; each
+Ubuntu group recorded 1299 passes and 97 existing conditional skips, with no
+failures or errors. Skips remain unexecuted cases, not passes; repeated matrix
+groups are not distinct test cases.
+
+Separate selected Claude SDK/Host cases passed 11/11 and Codex cases passed
+12/12 for that candidate. Codex tool-denial evidence covered the Host boundary,
+not native ACP permission requests. A later streaming pass does not establish
+a runtime fix for the earlier `0.2.4` failure; its record remains unchanged.
+These are local receipts for a frozen source/artifact combination, not
+GitHub-hosted CI results, all-provider qualification or authorization to publish.
+Subsequent changes require their own checks; keep raw diagnostics private and
+share only reviewed, redacted counts, categories and hashes.
 
 Source tests select this checkout's `src` through `tests/conftest.py`; they do
 not by themselves validate an installed wheel. See the
@@ -1162,7 +1190,7 @@ This software is **experimental** and provided for **research and educational pu
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.4. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.5. www.soulacp.dev
 
 <a id="alignment-philosophy"></a>
 

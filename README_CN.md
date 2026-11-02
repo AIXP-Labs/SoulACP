@@ -47,6 +47,11 @@
 SoulACP 需要 Python 3.10 或更高版本，并且至少安装一个受支持的 agent CLI
 或 ACP bridge，并在需要时完成认证。
 
+当前源码CI矩阵面向Windows和Ubuntu上的常规有GIL的CPython `3.10`至
+`3.15`；安装许可（`>=3.10`）不是测试回执。声称全部矩阵任务通过前，
+必须核对准确提交的CI结果。自由线程构建、子解释器和实验性JIT模式
+不在本次资格范围内。Provider CLI真实集成与Python兼容性分别验收。
+
 ### 包索引版本
 
 ```bash
@@ -55,6 +60,10 @@ pip install soulacp
 
 GitHub 与 PyPI 使用相同版本号同步发布。
 如需明确选择 Python 解释器，可使用 `python -m pip install soulacp`。
+
+本checkout目标为`0.2.5`，在记录发布回执前仅是本地候选。
+`pip install soulacp`安装最新已发布版本，而不是未发布的checkout。
+本地部署不代表已经在PyPI发布。
 
 ### 当前源码
 
@@ -80,7 +89,7 @@ python -m pip install -e ".[dev]"
 python -c "import importlib.metadata as m, soulacp; print(m.version('soulacp')); print(soulacp.__version__)"
 ```
 
-验收本 checkout 时两者应为 `0.2.4`。若不一致，可在本机检查
+验收本 checkout 时两者应为 `0.2.5`。若不一致，可在本机检查
 `soulacp.__file__`，分享诊断前须脱敏个人路径。Editable 安装、wheel 和下游
 锁文件是不同的安装来源；替换磁盘文件不会重载已经运行的 worker。
 
@@ -208,7 +217,7 @@ print("Installed:", installed)
 npm install -g "@agentclientprotocol/claude-agent-acp@>=0.86.0" "@agentclientprotocol/codex-acp@>=2.1.1"
 ```
 
-版本范围须保留引号，避免 shell 把 `>` 当作重定向。这些范围与 SoulACP 0.2.4
+版本范围须保留引号，避免 shell 把 `>` 当作重定向。这些范围与 SoulACP 0.2.5
 的安装提示一致，不是精确锁版，也不代表所有后续 bridge/模型组合均已验收。
 Bridge 可能自带 CLI/runtime，因此只升级全局 `claude` 或 `codex` 不能证明
 bridge 实际使用了哪个 runtime。应核对已安装 bridge 的包元数据和其报告的
@@ -947,9 +956,9 @@ PYTHONPATH=src python -m pyright --verifytypes soulacp --ignoreexternal
 python -m bandit -q -r src/soulacp
 
 # 在全新且不存在的目录构建，不与历史发布混用
-python tools/build_release.py --outdir dist/0.2.4
-python -m twine check dist/0.2.4/soulacp-0.2.4-py3-none-any.whl dist/0.2.4/soulacp-0.2.4.tar.gz
-python tools/check_sdist.py dist/0.2.4/soulacp-0.2.4.tar.gz
+python tools/build_release.py --outdir dist/0.2.5
+python -m twine check dist/0.2.5/soulacp-0.2.5-py3-none-any.whl dist/0.2.5/soulacp-0.2.5.tar.gz
+python tools/check_sdist.py dist/0.2.5/soulacp-0.2.5.tar.gz
 ```
 
 仓库hook使用独立Python >=3.11的[hook环境](CONTRIBUTING_CN.md#独立仓库-hook-环境)。
@@ -978,6 +987,17 @@ Claude SDK七项及SoulBot Host四项通过（11/11）。独立Codex场通过SDK
 Host两项，一项Host流式精确输出断言失败，另两项Host工具场未启动。
 这些是限定范围的结果，不是全部provider、模型、认证路径或完整业务流程的资格。
 发布后的测试/文档修正不改变已发布`0.2.4`归档。
+
+2026-11-02，一份冻结的`0.2.5`候选完成Windows和Ubuntu上常规CPython
+`3.10`至`3.15`的本地验收，含最低开发依赖栈和源码包解包，每平台八组。
+Windows每组1305通过、91项既有条件跳过；Ubuntu每组1299通过、97项既有条件
+跳过，均零失败、零错误。跳过仍是未执行的用例，不是通过；重复矩阵组不计为不同用例。
+
+该候选另有选定的Claude SDK/Host场11/11通过、Codex场12/12通过。Codex工具
+拒绝证据覆盖Host边界，不是原生ACP权限请求。后续流式通过不能证明早先`0.2.4`
+失败已被运行库修复，旧记录保持不变。这些是某一冻结源码/产物组合的本地回执，
+不是GitHub托管CI结果、全部Provider资格或发布授权；后续改动须单独核验。
+原始诊断保持私有，只分享经审阅、脱敏的计数、类别和摘要。
 
 源码测试通过 `tests/conftest.py` 优先导入本 checkout 的 `src`，不能单独证明
 已安装 wheel 正确。分发 SHA、冷安装和隐私核查见
@@ -1034,7 +1054,7 @@ AIXP Labs 开发并维护以下核心项目：
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.4. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.5. www.soulacp.dev
 
 <a id="values-philosophy"></a>
 

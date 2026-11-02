@@ -2,7 +2,7 @@
 
 PYTHON ?= python
 HOOKS_PYTHON ?= $(if $(filter Windows_NT,$(OS)),.venv-hooks/Scripts/python.exe,.venv-hooks/bin/python)
-DIST_DIR ?= dist/0.2.4
+DIST_DIR ?= dist/0.2.5
 
 install:
 	pip install -e ".[dev]"

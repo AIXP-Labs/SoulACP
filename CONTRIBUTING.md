@@ -67,6 +67,16 @@ Maintainers will assess and implement if approved.
 - The development profile includes the OpenTelemetry SDK for real in-memory
   exception-event privacy tests; it does not become a runtime dependency.
 
+The source CI test matrix targets standard, GIL-enabled CPython 3.10 through 3.15
+on Windows and Ubuntu. Keep all existing interpreter targets and `-W error`;
+record default integration skips separately from real-provider results. A new
+classifier or a successful install is not evidence that the matrix passed.
+On Windows 3.15, CI prepares PyYAML using its official `PYYAML_FORCE_LIBYAML=0`
+build option before installing the development profile, because its optional C
+extension currently lacks a matching wheel. This only changes YAML tooling's
+installation path; Bandit and all SDK assertions still run. The quality and
+minimum-dependency jobs keep their existing interpreters and security floors.
+
 For the configured statement/branch coverage gate, run
 `python -m pytest tests/ -W error --cov=soulacp --cov-branch --cov-report=term`.
 `make check` covers lint, types and Bandit only; it is not a full CI run. Tests,
@@ -116,7 +126,7 @@ and session-cache locations, but are not a substitute for reviewing staged files
 
 ### Release Identity and Privacy
 
-For the current **0.2.4** source target:
+For the current **0.2.5** source target:
 
 1. Check `pyproject.toml`, `src/soulacp/meta.py`, the root `soulacp` entry in
    `uv.lock`, current documentation footers, and the current changelog entry.
@@ -127,7 +137,7 @@ For the current **0.2.4** source target:
    for a subsequent build. `make clean` remains an explicitly destructive action:
 
    ```bash
-   python tools/build_release.py --outdir dist/0.2.4
+   python tools/build_release.py --outdir dist/0.2.5
    # Alternatively: make build DIST_DIR=dist/another-new-directory
    ```
 
@@ -200,4 +210,4 @@ Copyright 2026 AIXP Labs AIXP.dev | SoulACP.dev
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.4. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.5. www.soulacp.dev

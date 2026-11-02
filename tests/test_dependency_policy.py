@@ -76,7 +76,7 @@ def test_ci_keeps_both_audits_and_python310_matrix():
     assert "pip-audit -r requirements-min.txt" in workflow
     assert "uv export --no-config --frozen --all-extras --no-hashes --no-emit-project" in workflow
     assert 'pip-audit -r "$RUNNER_TEMP/soulacp-lock-audit.txt"' in workflow
-    assert 'python-version: ["3.10", "3.11", "3.12", "3.13"]' in workflow
+    assert 'python-version: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]' in workflow
     assert "--ignore-vuln" not in workflow
     with (ROOT / "uv.lock").open("rb") as stream:
         lock = tomli.load(stream)

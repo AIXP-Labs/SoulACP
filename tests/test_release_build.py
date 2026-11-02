@@ -21,7 +21,10 @@ def tool():
 
 
 def test_make_build_does_not_depend_on_clean():
+    import soulacp
+
     text = (ROOT / "Makefile").read_text()
+    assert f"DIST_DIR ?= dist/{soulacp.__version__}" in text
     assert "\nbuild:\n" in text
     assert "build: clean" not in text
     assert 'tools/build_release.py --outdir "$(DIST_DIR)"' in text

@@ -65,6 +65,13 @@
 - 不引入必需的 runtime 依赖；OpenTelemetry API 保持可选
 - 开发环境包含OpenTelemetry SDK，用于真实内存导出的异常事件隐私测试；它不是运行时必装依赖。
 
+源码CI测试矩阵面向Windows和Ubuntu上的常规有GIL的CPython 3.10至3.15。
+保留全部已有解释器目标和`-W error`，默认集成skip与真实Provider结果分开记录。
+新增版本分类或安装成功不能证明整个矩阵已通过。Windows 3.15下，CI先使用
+PyYAML官方的`PYYAML_FORCE_LIBYAML=0`构建选项准备开发环境，因为其可选C扩展
+当前缺少匹配wheel。这只改变YAML工具的安装路径，Bandit和所有SDK断言仍执行。
+质量与最低依赖任务保留原解释器和安全版本下限。
+
 现有语句/分支覆盖率门使用
 `python -m pytest tests/ -W error --cov=soulacp --cov-branch --cov-report=term`。
 `make check`只覆盖lint、类型与Bandit，不是完整CI；测试、hook、依赖审计和受控构建
@@ -108,7 +115,7 @@ Windows 使用 `py -3.11 -m venv .venv-hooks` 创建环境，将上述解释器�
 
 ### 发布身份与隐私
 
-当前源码目标为 **0.2.4**：
+当前源码目标为 **0.2.5**：
 
 1. 核对 `pyproject.toml`、`src/soulacp/meta.py`、`uv.lock` 中本项目条目、
    当前文档页脚和当前 CHANGELOG 条目。不要改写历史版本，也不要把日期当上传回执。
@@ -117,7 +124,7 @@ Windows 使用 `py -3.11 -m venv .venv-hooks` 创建环境，将上述解释器�
    `DIST_DIR`另选新目录。`make clean`仍是需显式选择的破坏性清理：
 
    ```bash
-   python tools/build_release.py --outdir dist/0.2.4
+   python tools/build_release.py --outdir dist/0.2.5
    # 或：make build DIST_DIR=dist/another-new-directory
    ```
 
@@ -173,4 +180,4 @@ Copyright 2026 AIXP Labs AIXP.dev | SoulACP.dev
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.4. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.5. www.soulacp.dev

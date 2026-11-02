@@ -11,10 +11,28 @@ publication status; use exact source/artifact release receipts for that status.
 
 Publication status, verified 2026-11-02: [0.2.4 is published on PyPI](https://pypi.org/project/soulacp/0.2.4/).
 Historical candidate labels below are retained as recorded, not as the current
-publication status. Post-release test/documentation changes are listed under
-Unreleased; the published 0.2.4 archives remain unchanged.
+publication status. The current source target is 0.2.5; its post-release
+compatibility, test and documentation changes are grouped below. The published
+0.2.4 archives remain unchanged.
 
 ## [Unreleased]
+
+No changes yet.
+
+## [0.2.5] - Unreleased
+
+This is a local source/deployment candidate, not a GitHub or PyPI publication receipt.
+Runtime logic and safety policies remain unchanged; only the runtime version
+identity advances from 0.2.4 to 0.2.5.
+
+### Compatibility
+- Extend the source CPython classifiers and Windows/Ubuntu CI matrix through
+  3.14 and 3.15, retaining the 3.10 floor, existing targets and strict warning,
+  coverage, permission and privacy checks. Add positive and negative support-contract tests.
+- Prepare the optional PyYAML tooling without its C extension only for Windows
+  3.15 before installing the development profile; do not add a runtime dependency
+  or omit Bandit. Provider integration and nonstandard interpreter builds remain
+  separately qualified. Published 0.2.4 archives are not changed by this source work.
 
 ### Fixed
 - Close the source transport before transferring a session to a separately
@@ -30,7 +48,7 @@ Unreleased; the published 0.2.4 archives remain unchanged.
 - Record the separately scoped 2026-11-02 Claude/Codex acceptance outcomes without
   claiming all providers passed or erasing the outstanding Codex streaming failure.
 - Clarify published 0.2.4 status while preserving historical candidate entries.
-  No runtime, dependency, permission-policy or published-artifact change.
+  No runtime-logic, dependency, permission-policy or published-artifact change.
 
 ## [0.2.4] - Unreleased
 
