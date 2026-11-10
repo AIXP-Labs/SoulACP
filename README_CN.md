@@ -42,6 +42,9 @@
 - **当前 ACP 生命周期**：能力约束的认证、登出、session 关闭、请求取消和配置 API
 - **纯标准库核心**：无必需运行时依赖；OpenTelemetry API 为可选依赖
 
+SoulBot 提供应用框架，SoulRun 执行 AISOP 程序和 AISP 技能，SoulACP 通过 ACP
+连接提供方。调用应用继续负责流程编排、工具授权和业务策略。
+
 ## 安装
 
 SoulACP 需要 Python 3.10 或更高版本，并且至少安装一个受支持的 agent CLI
@@ -61,7 +64,7 @@ pip install soulacp
 GitHub 与 PyPI 使用相同版本号同步发布。
 如需明确选择 Python 解释器，可使用 `python -m pip install soulacp`。
 
-本checkout目标为`0.2.5`，在记录发布回执前仅是本地候选。
+本checkout目标为`0.2.6`，在记录发布回执前仅是本地候选。
 `pip install soulacp`安装最新已发布版本，而不是未发布的checkout。
 本地部署不代表已经在PyPI发布。
 
@@ -89,7 +92,7 @@ python -m pip install -e ".[dev]"
 python -c "import importlib.metadata as m, soulacp; print(m.version('soulacp')); print(soulacp.__version__)"
 ```
 
-验收本 checkout 时两者应为 `0.2.5`。若不一致，可在本机检查
+验收本 checkout 时两者应为 `0.2.6`。若不一致，可在本机检查
 `soulacp.__file__`，分享诊断前须脱敏个人路径。Editable 安装、wheel 和下游
 锁文件是不同的安装来源；替换磁盘文件不会重载已经运行的 worker。
 
@@ -214,10 +217,10 @@ print("Installed:", installed)
 使用以下命令安装当前 Claude 与 Codex ACP bridge：
 
 ```bash
-npm install -g "@agentclientprotocol/claude-agent-acp@>=0.86.0" "@agentclientprotocol/codex-acp@>=2.1.1"
+npm install -g "@agentclientprotocol/claude-agent-acp@>=0.100.0" "@agentclientprotocol/codex-acp@>=2.5.0"
 ```
 
-版本范围须保留引号，避免 shell 把 `>` 当作重定向。这些范围与 SoulACP 0.2.5
+版本范围须保留引号，避免 shell 把 `>` 当作重定向。这些范围与 SoulACP 0.2.6
 的安装提示一致，不是精确锁版，也不代表所有后续 bridge/模型组合均已验收。
 Bridge 可能自带 CLI/runtime，因此只升级全局 `claude` 或 `codex` 不能证明
 bridge 实际使用了哪个 runtime。应核对已安装 bridge 的包元数据和其报告的
@@ -308,6 +311,11 @@ asyncio.run(main())
 | `CODEX_SANDBOX_MODE` | `read-only` / `workspace-write` / `danger-full-access` | （codex 默认） | 文件系统权限 |
 | `CODEX_APPROVAL_POLICY` | `untrusted` / `on-request` / `never` | （Codex 默认） | 审批提示 |
 | `CODEX_NETWORK_ACCESS` | `true` / `1` / `yes` | 不注入 | 在 `workspace-write` 中启用联网；其他值不覆盖 Codex 配置 |
+
+Codex ACP 2.5 声明的原生模式包括 `read-only`、`workspace-write`、`agent` 和
+`agent-full-access`。应检查 `session_mode_state`，通过 `set_mode()` 选择实际声明
+的值，不应假设存在 `plan` 模式。`CODEX_SANDBOX_MODE` 和 `CODEX_APPROVAL_POLICY`
+覆盖项分别配置原生运行时；模式名称本身不能证明 OS 沙箱已落实。
 
 `ACPConfig.extra_args` 中显式的 `model_reasoning_effort` 优先；否则先读取
 `extra_env`，再读取允许继承的父环境。显式空字符串不会注入覆盖值。可接受档位
@@ -516,7 +524,11 @@ connect/resume过程应由`try`/`finally`保护，即使失败也等待`disconne
 及当前选择。稳定的 `session_info_update`、`usage_update` 与
 `available_commands_update` 通知会经校验后分别写入 `session_info`、
 `session_usage` 和 `available_commands`。这五类 session 状态会在
-new/load/resume 迁移开始时统一清空，迁移失败时统一恢复。
+new/load/resume 迁移开始时统一清空，迁移失败时统一恢复。会话响应会在接收循环中
+先提交这些状态，再唤醒等待 RPC 的调用方，使紧随其后的合法通知使用新会话。
+迟到或已取消的响应不能复活已经失效的迁移。`set_config_option()` 将等待中的结果
+绑定到原逻辑会话，包括同 ID 重载；会话改变时抛出 `ACPProtocolError`，不会把
+该配置应用到当前会话。会话迁移进行期间会拒绝新的配置请求。
 所有稳定 ACP v1 session update 结构，包括 content block、tool call 和 plan，
 都会在状态变更或 callback 交付前完成结构校验。`set_update_callback()` 仍按接收
 顺序提供所有原始 update，包括不会被拼入响应
@@ -956,10 +968,41 @@ PYTHONPATH=src python -m pyright --verifytypes soulacp --ignoreexternal
 python -m bandit -q -r src/soulacp
 
 # 在全新且不存在的目录构建，不与历史发布混用
-python tools/build_release.py --outdir dist/0.2.5
-python -m twine check dist/0.2.5/soulacp-0.2.5-py3-none-any.whl dist/0.2.5/soulacp-0.2.5.tar.gz
-python tools/check_sdist.py dist/0.2.5/soulacp-0.2.5.tar.gz
+python tools/build_release.py --outdir dist/0.2.6
+python -m twine check dist/0.2.6/soulacp-0.2.6-py3-none-any.whl dist/0.2.6/soulacp-0.2.6.tar.gz
+python tools/check_sdist.py dist/0.2.6/soulacp-0.2.6.tar.gz
 ```
+
+CI 使用 `-m "not integration"` 选择非提供方测试，集成用例记为 deselected，不能
+计作通过。浮动测试矩阵保留 Windows/Ubuntu 与 Python `3.10` 至 `3.15` 的 12 个
+组合；冻结依赖任务另在两个平台的 Python `3.12` 上使用修复后的 `uv 0.13.7`：
+
+```bash
+python3.12 -m venv .venv-ci-tools
+.venv-ci-tools/bin/python -m pip --isolated install "uv==0.13.7"
+.venv-ci-tools/bin/uv lock --no-config --check
+.venv-ci-tools/bin/uv sync --no-config --frozen --all-extras --python 3.12
+.venv-ci-tools/bin/uv pip check
+.venv-ci-tools/bin/uv run --no-config --frozen --all-extras pytest tests/ -W error -m "not integration" -q --cov=soulacp --cov-branch --cov-report=term
+```
+
+```powershell
+py -3.12 -m venv .venv-ci-tools
+.venv-ci-tools\Scripts\python.exe -m pip --isolated install "uv==0.13.7"
+.venv-ci-tools\Scripts\uv.exe lock --no-config --check
+.venv-ci-tools\Scripts\uv.exe sync --no-config --frozen --all-extras --python 3.12
+.venv-ci-tools\Scripts\uv.exe pip check
+.venv-ci-tools\Scripts\uv.exe run --no-config --frozen --all-extras pytest tests/ -W error -m "not integration" -q --cov=soulacp --cov-branch --cov-report=term
+```
+
+应显式选用隔离解释器中的可执行文件，不要调用旧全局 uv。Ubuntu 需要解释器的
+venv/ensurepip 支持，也可使用 managed Python。工具环境与提供方登录 profile 分离；
+`.venv-ci-tools/` 已从仓库输入中排除。
+
+CI 在冻结同步前核对锁文件新鲜度。全 marker 审计使用 `python tools/audit_lock.py`，
+其解释器需安装 `pip-audit==2.10.1`。它审计锁中所有 registry 包及版本，包括其他
+OS/Python 分支和同包多版本；响应不完整、不支持的来源、审计失败或漏洞均使检查失败。
+审计子进程显式使用 `stdout` 和任务专属临时缓存，最低依赖栈审计也拒绝跳过依赖。
 
 仓库hook使用独立Python >=3.11的[hook环境](CONTRIBUTING_CN.md#独立仓库-hook-环境)。
 `make check`执行lint、类型和安全检查，不运行测试、hook、审计或构建。
@@ -1054,7 +1097,7 @@ AIXP Labs 开发并维护以下核心项目：
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.5. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.6. www.soulacp.dev
 
 <a id="values-philosophy"></a>
 

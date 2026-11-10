@@ -13,6 +13,7 @@ import sys
 import threading
 import time as _time
 from contextlib import suppress as _suppress
+from types import SimpleNamespace
 
 import pytest
 
@@ -337,21 +338,12 @@ class HangingClient(StubClient):
 
 
 class ActivityClient(StubClient):
+    def __init__(self, config: ACPConfig) -> None:
+        super().__init__(config)
+        self.rpc_complete = asyncio.Event()
+
     async def _rpc(self, method: str, params: dict, timeout: float | None = None):
-        for _ in range(3):
-            await asyncio.sleep(0.1)
-            self._handle_stream_update(
-                {
-                    "params": {
-                        "update": {
-                            "sessionUpdate": "tool_call_update",
-                            "toolCallId": "activity-tool",
-                            "status": "in_progress",
-                        }
-                    }
-                }
-            )
-        self._handle_stream_update({"params": {"update": {"sessionUpdate": "turn_end"}}})
+        await self.rpc_complete.wait()
         return {"stopReason": "end_turn"}
 
 
@@ -803,16 +795,69 @@ async def test_explicit_stream_close_propagates_cleanup_failure():
 
 
 @pytest.mark.asyncio
-async def test_non_text_session_updates_reset_stream_inactivity():
-    # The full response takes longer than timeout_stream, while each activity
-    # gap remains comfortably shorter. The test therefore fails if non-text
-    # updates stop resetting the inactivity timer.
-    client = ActivityClient(make_config(timeout_prompt=2, timeout_stream=0.25))
+@pytest.mark.parametrize("scenario", ["activity", "missing_activity", "prompt_deadline"])
+async def test_non_text_session_updates_reset_stream_inactivity(monkeypatch, scenario):
+    client = ActivityClient(
+        make_config(timeout_prompt=0.2 if scenario == "prompt_deadline" else 2, timeout_stream=0.25)
+    )
+    clock = SimpleNamespace(now=0.0)
+    sdk_asyncio = SimpleNamespace(**vars(asyncio))
+    sdk_asyncio.get_running_loop = lambda: SimpleNamespace(time=lambda: clock.now)
+    # Only the SDK's clock lookup is replaced. asyncio's real scheduling and
+    # loop clock remain untouched, including cancellation/cleanup awaits.
+    monkeypatch.setattr(base_client_module, "asyncio", sdk_asyncio)
+    original_wait = base_client_module.wait_for_owned
+    original_update = client._handle_stream_update
+    timeline = [0.1, 0.2, 0.3, 0.4]
+    waits = []
 
-    chunks = [chunk async for chunk in client.query_stream("hello")]
+    async def scheduled_wait(awaitable, timeout):
+        if getattr(awaitable, "cr_code", None) is not asyncio.Queue.get.__code__:
+            return await original_wait(awaitable, timeout)
+        await asyncio.sleep(0)  # Start the real send task and its gated RPC.
+        waits.append(timeout)
+        expires = clock.now + timeout
+        while timeline and timeline[0] <= expires:
+            clock.now = timeline.pop(0)
+            if clock.now == 0.4:
+                client.rpc_complete.set()
+                await asyncio.sleep(0)
+            else:
+                original_update(
+                    {
+                        "params": {
+                            "update": {
+                                "sessionUpdate": "tool_call_update",
+                                "toolCallId": "activity-tool",
+                                "status": "in_progress",
+                            }
+                        }
+                    }
+                )
+                if scenario == "missing_activity":
+                    # Negative control: remove only activity delivery, not
+                    # validation, RPC completion or the SDK's deadline logic.
+                    assert client._stream_queue.get_nowait() is base_client_module._STREAM_ACTIVITY
+                    client._activity_queued = False
+            if not client._stream_queue.empty():
+                return await awaitable
+        clock.now = expires
+        awaitable.close()
+        raise asyncio.TimeoutError
 
-    assert chunks == []
-    assert client.notifications == []
+    monkeypatch.setattr(base_client_module, "wait_for_owned", scheduled_wait)
+    if scenario == "activity":
+        chunks = [chunk async for chunk in client.query_stream("hello")]
+        assert chunks == [] and client.notifications == []
+        assert clock.now == 0.4 > client.config.timeout_stream
+        assert waits == [0.25] * 4
+    else:
+        error = ACPStreamTimeoutError if scenario == "missing_activity" else ACPPromptTimeoutError
+        with pytest.raises(error):
+            _chunks = [chunk async for chunk in client.query_stream("hello")]
+        assert clock.now == (0.25 if scenario == "missing_activity" else 0.2)
+        assert [method for method, _params in client.notifications] == ["session/cancel"]
+    assert client._streaming is False and client._stream_queue is None
 
 
 def test_non_text_activity_notifications_are_coalesced():

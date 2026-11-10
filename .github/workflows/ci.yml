@@ -16,6 +16,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
@@ -43,25 +45,27 @@ jobs:
         run: python tools/check_sdist.py dist/ci-build/*.tar.gz
       - name: Audit minimum repository-hook dependencies
         run: |
-          python -m pip install pip-audit==2.10.1 uv==0.7.21
-          pip-audit -r requirements-hooks.txt
-      - name: Audit frozen dependencies on Linux
+          python -m pip install pip-audit==2.10.1 uv==0.13.7
+          python -m pip_audit --strict --output stdout --cache-dir "$RUNNER_TEMP/soulacp-pip-audit-hooks" -r requirements-hooks.txt
+      - name: Audit all frozen dependency versions across marker branches
         run: |
-          uv export --no-config --frozen --all-extras --no-hashes --no-emit-project --format requirements-txt --output-file "$RUNNER_TEMP/soulacp-lock-audit.txt"
-          pip-audit -r "$RUNNER_TEMP/soulacp-lock-audit.txt"
+          uv lock --no-config --check
+          python tools/audit_lock.py
 
   minimum-dependencies:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.10"
       - name: Install minimum supported development stack
         run: pip install -e ".[dev]" -c requirements-min.txt
       - name: Run tests with branch coverage
-        run: pytest tests/ -W error -q --cov=soulacp --cov-branch --cov-report=term
+        run: pytest tests/ -W error -m "not integration" -q --cov=soulacp --cov-branch --cov-report=term
       - name: Ruff check
         run: ruff check src/soulacp/ tests/ examples/ tools/
       - name: Ruff format
@@ -79,7 +83,30 @@ jobs:
       - name: Audit minimum development dependencies
         run: |
           python -m pip install pip-audit==2.10.1
-          pip-audit -r requirements-min.txt
+          python -m pip_audit --strict --output stdout --cache-dir "$RUNNER_TEMP/soulacp-pip-audit-minimum" -r requirements-min.txt
+
+  locked-dependencies:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Install frozen development and hook dependencies
+        run: |
+          python -m pip install uv==0.13.7
+          uv lock --no-config --check
+          uv sync --no-config --frozen --all-extras --python 3.12
+          uv pip check
+      - name: Test the frozen stack
+        run: uv run --no-config --frozen --all-extras pytest tests/ -W error -m "not integration" -q --cov=soulacp --cov-branch --cov-report=term
 
   test:
     runs-on: ${{ matrix.os }}
@@ -91,6 +118,8 @@ jobs:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ matrix.python-version }}
@@ -103,4 +132,4 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev]"
       - name: Run unit tests with coverage
-        run: pytest tests/ -W error -v --cov=soulacp --cov-branch --cov-report=xml
+        run: pytest tests/ -W error -m "not integration" -v --cov=soulacp --cov-branch --cov-report=xml

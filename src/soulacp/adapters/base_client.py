@@ -246,6 +246,22 @@ class _SessionStateSnapshot:
 
 
 @dataclass(slots=True)
+class _RPCLifecycle:
+    """One request's shared reader/waiter state, without retaining its payload."""
+
+    transition_id: str | None
+    previous_state: _SessionStateSnapshot | None
+    mode_id: str | None = None
+    mode_session_id: str | None = None
+    mode_state: dict[str, Any] | None = None
+    config_session_id: str | None = None
+    config_session_generation: int | None = None
+    applied: bool = False
+    abandoned: bool = False
+    finished: bool = False
+
+
+@dataclass(slots=True)
 class _PermissionTurnState:
     cancelled: bool = False
     active: bool = False
@@ -616,6 +632,9 @@ class ACPClientBase(ABC):
         self.available_commands: list[dict[str, Any]] = []
         self._session_transition_id: str | None = None
         self._session_transition_active = False
+        self._mode_state_revision = 0
+        self._session_state_generation = 0
+        self._rpc_lifecycles: dict[int, _RPCLifecycle] = {}
 
         self._msg_id: int = 0
         self._pending: dict[int, asyncio.Future] = {}
@@ -883,6 +902,7 @@ class ACPClientBase(ABC):
 
     def _reset_protocol_state(self) -> None:
         """Clear metadata owned by a previous logical transport."""
+        self._retire_rpc_lifecycles()
         self.session_id = None
         self.agent_capabilities = {}
         self.agent_info = None
@@ -898,6 +918,7 @@ class ACPClientBase(ABC):
 
     def _clear_session_state(self) -> None:
         """Clear metadata owned by the current logical session."""
+        self._session_state_generation += 1
         self.session_config_options = []
         self.session_mode_state = None
         self.session_info = {}
@@ -920,6 +941,7 @@ class ACPClientBase(ABC):
         )
 
     def _restore_session_state(self, snapshot: _SessionStateSnapshot) -> None:
+        self._session_state_generation += 1
         self.session_id = snapshot.session_id
         self.session_config_options = snapshot.config_options
         self.session_mode_state = snapshot.mode_state
@@ -1070,6 +1092,8 @@ class ACPClientBase(ABC):
 
     async def set_config_option(self, config_id: str, value: str | bool) -> list[dict[str, Any]]:
         """Set an advertised session option and return the complete new state."""
+        if self._session_transition_active:
+            raise ACPProtocolError("Cannot set config during session transition")
         if not self.session_id:
             raise RuntimeError("No active ACP session")
         if not isinstance(config_id, str) or not config_id:
@@ -1102,7 +1126,11 @@ class ACPClientBase(ABC):
         }
         if isinstance(value, bool):
             params["type"] = "boolean"
+        generation = self._session_state_generation
+        session_id = self.session_id
         await self._rpc("session/set_config_option", params, timeout=self.config.timeout_connect)
+        if self.session_id != session_id or self._session_state_generation != generation:
+            raise ACPProtocolError("Session changed during config request")
         return copy.deepcopy(self.session_config_options)
 
     async def set_mode(self, mode_id: str) -> dict[str, Any]:
@@ -1119,13 +1147,21 @@ class ACPClientBase(ABC):
         if mode_id not in {mode.get("id") for mode in available if isinstance(mode, dict)}:
             raise ValueError("mode was not advertised for this session")
 
+        revision = self._mode_state_revision
+        session_id = self.session_id
         result = await self._rpc(
             "session/set_mode",
             {"sessionId": self.session_id, "modeId": mode_id},
             timeout=self.config.timeout_connect,
         )
         self._validate_object_result(result, method="session/set_mode")
-        state["currentModeId"] = mode_id
+        if self.session_id != session_id or self.session_mode_state is not state:
+            raise ACPProtocolError("Session changed during mode request")
+        # Preserve custom/mock _rpc implementations, without overwriting a
+        # real response or later current_mode_update already applied by reader.
+        if self._mode_state_revision == revision:
+            state["currentModeId"] = mode_id
+            self._mode_state_revision += 1
         return copy.deepcopy(state)
 
     async def query(self, prompt: str) -> str:
@@ -1829,7 +1865,7 @@ class ACPClientBase(ABC):
             raise ACPProtocolError("session/list nextCursor must be a string or null")
         return copy.deepcopy(result)
 
-    def _capture_session_config(self, method: str, result: Any) -> None:
+    def _capture_session_config(self, method: str, result: Any, *, apply: bool = True) -> None:
         if method not in {"session/new", "session/load", "session/resume", "session/set_config_option"}:
             return
         if not isinstance(result, dict):
@@ -1840,7 +1876,8 @@ class ACPClientBase(ABC):
             if "configOptions" not in result:
                 raise ACPProtocolError("session/set_config_option response requires configOptions")
             next_options = self._validate_config_options(result["configOptions"], source=method)
-            self.session_config_options = next_options
+            if apply:
+                self.session_config_options = next_options
             return
 
         has_config_options = "configOptions" in result
@@ -1860,6 +1897,65 @@ class ACPClientBase(ABC):
             self.session_config_options = next_options or []
         if has_modes:
             self.session_mode_state = next_modes
+            self._mode_state_revision += 1
+
+    def _register_rpc_lifecycle(self, mid: int, method: str, params: dict[str, Any]) -> _RPCLifecycle:
+        if method == "session/set_config_option" and self._session_transition_active:
+            # A committed transition still owns its state until its waiter
+            # finishes. Reject before any transport writes, including raw RPCs.
+            raise ACPProtocolError("Cannot set config during session transition")
+        transition_id, previous = self._begin_rpc_lifecycle(method, params)
+        context = _RPCLifecycle(transition_id, previous)
+        if method == "session/set_mode" and isinstance(params.get("modeId"), str):
+            context.mode_id = params["modeId"]
+            context.mode_session_id = params.get("sessionId")
+            context.mode_state = self.session_mode_state
+        if method == "session/set_config_option":
+            context.config_session_id = params.get("sessionId")
+            context.config_session_generation = self._session_state_generation
+        self._rpc_lifecycles[mid] = context
+        return context
+
+    def _apply_rpc_lifecycle(self, method: str, result: Any, context: _RPCLifecycle) -> None:
+        if context.applied or context.abandoned or context.finished:
+            return
+        if method == "session/set_config_option" and (
+            context.config_session_id != self.session_id
+            or context.config_session_generation != self._session_state_generation
+        ):
+            # This is still the old request's response, so validate and deliver
+            # it without applying its snapshot to another logical session.
+            # Public set_config_option rejects the changed ownership on return.
+            self._capture_session_config(method, result, apply=False)
+            context.applied = True
+            return
+        self._complete_rpc_lifecycle(method, result, context.transition_id)
+        if (
+            method == "session/set_mode"
+            and context.mode_id is not None
+            and context.mode_session_id == self.session_id
+            and context.mode_state is self.session_mode_state
+            and self.session_mode_state is not None
+        ):
+            self.session_mode_state["currentModeId"] = context.mode_id
+            self._mode_state_revision += 1
+        context.applied = True
+
+    def _finish_pending_rpc(self, mid: int, context: _RPCLifecycle | None, succeeded: bool) -> None:
+        if context is not None and not context.finished:
+            # A validated response is wire-confirmed even when cancellation
+            # reaches its waiter before that coroutine has resumed.
+            self._finish_rpc_lifecycle(context.transition_id, context.previous_state, succeeded or context.applied)
+            context.finished = True
+        if self._rpc_lifecycles.get(mid) is context:
+            self._rpc_lifecycles.pop(mid, None)
+
+    def _retire_rpc_lifecycles(self) -> None:
+        # Finish synchronously before another transport can replace the state.
+        # Old waiters keep their context and cannot later roll back a new one.
+        for mid, context in list(self._rpc_lifecycles.items()):
+            context.abandoned = True
+            self._finish_pending_rpc(mid, context, False)
 
     def _begin_rpc_lifecycle(
         self,
@@ -2020,6 +2116,7 @@ class ACPClientBase(ABC):
         self._connected = False
         self._session_transition_id = None
         self._session_transition_active = False
+        self._retire_rpc_lifecycles()
         for future in self._pending.values():
             if not future.done():
                 future.set_exception(ConnectionError("ACP disconnected"))
@@ -2114,7 +2211,10 @@ class ACPClientBase(ABC):
             except (asyncio.TimeoutError, ProcessLookupError, PermissionError, OSError) as exc:
                 termination_error = exc
         if proc.returncode is None:
-            raise RuntimeError("ACP subprocess did not exit after terminate/kill") from termination_error
+            error = RuntimeError("ACP subprocess did not exit after terminate/kill")
+            if termination_error is not None:
+                _raise_private_cause(error, termination_error)
+            raise error from None
         if self.process is proc:
             self.process = None
 
@@ -2513,8 +2613,7 @@ class ACPClientBase(ABC):
 
         self._msg_id += 1
         mid = self._msg_id
-        transition_id: str | None = None
-        previous_session_state: _SessionStateSnapshot | None = None
+        lifecycle: _RPCLifecycle | None = None
         transition_succeeded = False
         request_write_started = False
 
@@ -2534,7 +2633,7 @@ class ACPClientBase(ABC):
             self._inflight[mid] = (method, time.monotonic())
             prompt_write_started = False
             try:
-                transition_id, previous_session_state = self._begin_rpc_lifecycle(method, params)
+                lifecycle = self._register_rpc_lifecycle(mid, method, params)
 
                 # Register pending before writing: a fast subprocess may answer
                 # before drain() returns.
@@ -2551,14 +2650,18 @@ class ACPClientBase(ABC):
                     raise asyncio.TimeoutError
                 await wait_for_owned(stdin.drain(), remaining)
                 result = await self._await_rpc_future(future, deadline)
-                self._complete_rpc_lifecycle(method, result, transition_id)
+                self._apply_rpc_lifecycle(method, result, lifecycle)
                 transition_succeeded = True
             except asyncio.CancelledError:
+                if lifecycle is not None:
+                    lifecycle.abandoned = True
                 await self._notify_request_cancel(mid)
                 if request_write_started:
                     await self._invalidate_uncertain_rpc_transport(method)
                 raise
             except asyncio.TimeoutError as exc:
+                if lifecycle is not None:
+                    lifecycle.abandoned = True
                 await self._notify_request_cancel(mid)
                 if request_write_started:
                     await self._invalidate_uncertain_rpc_transport(method)
@@ -2577,12 +2680,16 @@ class ACPClientBase(ABC):
                     _raise_private_cause(ACPAuthenticationError(), rpc_err)
                 raise
             except ACPResponseError as exc:
+                if lifecycle is not None:
+                    lifecycle.abandoned = True
                 if request_write_started:
                     await self._invalidate_uncertain_rpc_transport(method)
                 if method == "authenticate" and self._auth_method_id is not None:
                     _raise_private_cause(ACPAuthenticationError(), exc)
                 raise
             except Exception as exc:
+                if lifecycle is not None:
+                    lifecycle.abandoned = True
                 if request_write_started:
                     await self._invalidate_uncertain_rpc_transport(method)
                 if prompt_write_started:
@@ -2591,7 +2698,7 @@ class ACPClientBase(ABC):
                     _raise_private_cause(ACPAuthenticationError(), exc)
                 raise
             finally:
-                self._finish_rpc_lifecycle(transition_id, previous_session_state, transition_succeeded)
+                self._finish_pending_rpc(mid, lifecycle, transition_succeeded)
                 _finalize_rpc_future(future)
                 self._pending.pop(mid, None)
                 self._inflight.pop(mid, None)
@@ -2737,6 +2844,7 @@ class ACPClientBase(ABC):
                     len(self._stderr_buffer),
                 )
             self._connected = False
+            self._retire_rpc_lifecycles()
             pending_error = failure or ConnectionError("ACP disconnected")
             for fut in self._pending.values():
                 if not fut.done():
@@ -2940,7 +3048,10 @@ class ACPClientBase(ABC):
             if mid in self._pending:
                 fut = self._pending[mid]
                 inflight_method, start_ts = self._inflight.get(mid, (None, None))
+                lifecycle = self._rpc_lifecycles.get(mid)
                 try:
+                    if fut.done() or (lifecycle is not None and (lifecycle.abandoned or lifecycle.finished)):
+                        return
                     if "error" in msg:
                         if not isinstance(error, dict):
                             raise ACPProtocolError("JSON-RPC error response must contain an error object")
@@ -2961,6 +3072,8 @@ class ACPClientBase(ABC):
                         )
                     else:
                         result = msg.get("result", {})
+                        if lifecycle is not None and inflight_method == "session/prompt":
+                            self._require_prompt_stop_reason(result)
                         # Some providers embed final text in the RPC response.
                         # Validate and append it before publishing success to the
                         # waiting coroutine so protocol failures cannot race a
@@ -2984,6 +3097,12 @@ class ACPClientBase(ABC):
                                     tail = result_text[len(accumulated) :]
                                     self._append_chunk(tail)
                                     logger.debug("Recovered %d chars from RPC result", len(tail))
+                        # Commit in receive order, before waking the waiter or
+                        # consuming another buffered session/update. The local
+                        # context survives pending-map removal for exactly-once
+                        # application and cancellation/rollback ownership.
+                        if lifecycle is not None and inflight_method is not None:
+                            self._apply_rpc_lifecycle(inflight_method, result, lifecycle)
                         fut.set_result(result)
                 except Exception as exc:
                     if not fut.done():
@@ -3122,6 +3241,7 @@ class ACPClientBase(ABC):
                 if current not in {mode.get("id") for mode in available if isinstance(mode, dict)}:
                     raise ACPProtocolError("current_mode_update selected a mode that was not advertised")
                 self.session_mode_state["currentModeId"] = current
+                self._mode_state_revision += 1
 
         elif utype == "session_info_update":
             self._capture_session_info_update(update)

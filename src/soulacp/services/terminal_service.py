@@ -14,7 +14,7 @@ from typing import Any
 
 from soulacp.binary import find_binary_in_environment
 from soulacp.environment import build_subprocess_environment, update_subprocess_environment
-from soulacp.privacy import exception_summary
+from soulacp.privacy import _raise_private_cause, exception_summary
 
 DEFAULT_OUTPUT_BYTE_LIMIT = 1_048_576
 MAX_OUTPUT_BYTE_LIMIT = 10 * 1_048_576
@@ -309,7 +309,7 @@ class TerminalService:
                 if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError)
             )
         if failures:
-            raise RuntimeError(f"failed to terminate {len(failures)} terminal process(es)") from failures[0]
+            _raise_private_cause(RuntimeError(f"failed to terminate {len(failures)} terminal process(es)"), failures[0])
 
     async def _capture_output(self, terminal: _Terminal) -> None:
         cancelled = False
@@ -377,7 +377,10 @@ class TerminalService:
                 except (asyncio.TimeoutError, ProcessLookupError, PermissionError, OSError) as exc:
                     termination_error = exc
         if process.returncode is None:
-            raise RuntimeError("terminal process did not exit after terminate/kill") from termination_error
+            error = RuntimeError("terminal process did not exit after terminate/kill")
+            if termination_error is not None:
+                _raise_private_cause(error, termination_error)
+            raise error from None
         if terminal.task is not None and terminal.task is not asyncio.current_task():
             try:
                 done, _pending = await asyncio.wait({terminal.task}, timeout=CAPTURE_JOIN_TIMEOUT)

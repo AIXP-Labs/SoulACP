@@ -6,7 +6,7 @@ Security fixes are applied to the latest released minor version and the
 current `main` branch. Users should reproduce reports against the newest
 available release before submitting them.
 
-The current checkout targets 0.2.5; a source version or changelog date is not a
+The current checkout targets 0.2.6; a source version or changelog date is not a
 publication receipt. Identify the actual installed distribution and source or
 artifact revision in a report. Reproductions should use synthetic inputs rather
 than real credentials or private session data.
@@ -185,6 +185,18 @@ cookies, and authorization headers before sharing. Never place secrets in
 command-line examples. An exact model or provider metadata field is not an
 independent attestation of the model that served a request.
 
+Repository ignore rules exclude local provider credentials, session histories,
+private diagnostic captures, and credential bundles, including nested profiles.
+They are a guard against accidental staging, not a secret scanner: Git continues
+tracking files that were already added, and copied or renamed secrets can evade
+these filename rules. Review staged content before sharing or building a release.
+Public `.env.example`, `.env.sample`, `.env.template`, and explicitly allowed
+synthetic authentication/session fixtures remain visible; use placeholders only.
+Shared provider configuration such as `.claude/settings.json` and
+`.codex/config.toml` also remains visible and must not contain tokens, headers,
+or private account paths. Keep real profiles and raw diagnostics outside the
+repository, and inspect CI artifacts independently of `.gitignore`.
+
 `ACP_OTEL_PROPAGATE=1` forwards only an active W3C `traceparent` and
 `tracestate` at subprocess startup. Baggage and custom propagation fields are
 not copied into the child environment.
@@ -202,4 +214,4 @@ mitigation is available.
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.5. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.6. www.soulacp.dev

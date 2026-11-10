@@ -69,13 +69,13 @@ _AGENTS: tuple[AgentInfo, ...] = (
     AgentInfo(
         "claude",
         "claude-acp/",
-        'npm install -g "@agentclientprotocol/claude-agent-acp@>=0.86.0"',
+        'npm install -g "@agentclientprotocol/claude-agent-acp@>=0.100.0"',
         "Auth: Claude Code/Anthropic credentials; legacy claude-code-acp remains supported",
     ),
     AgentInfo(
         "codex",
         "codex-acp/",
-        'npm install -g "@agentclientprotocol/codex-acp@>=2.1.1"',
+        'npm install -g "@agentclientprotocol/codex-acp@>=2.5.0"',
         "Login: codex login (ChatGPT account); example model: gpt-5.5",
     ),
     AgentInfo(

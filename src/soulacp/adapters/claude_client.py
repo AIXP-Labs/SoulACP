@@ -64,7 +64,7 @@ class ClaudeACPClient(ACPClientBase):
         self._binary = find_claude_binary()
         if not self._binary:
             raise FileNotFoundError(
-                'Claude ACP bridge not found. Install with: npm install -g "@agentclientprotocol/claude-agent-acp@>=0.86.0"'
+                'Claude ACP bridge not found. Install with: npm install -g "@agentclientprotocol/claude-agent-acp@>=0.100.0"'
             )
         return [self._binary]
 

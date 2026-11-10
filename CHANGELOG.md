@@ -11,13 +11,64 @@ publication status; use exact source/artifact release receipts for that status.
 
 Publication status, verified 2026-11-02: [0.2.4 is published on PyPI](https://pypi.org/project/soulacp/0.2.4/).
 Historical candidate labels below are retained as recorded, not as the current
-publication status. The current source target is 0.2.5; its post-release
+publication status. The current source target is 0.2.6; its post-release
 compatibility, test and documentation changes are grouped below. The published
 0.2.4 archives remain unchanged.
 
 ## [Unreleased]
 
 No changes yet.
+
+## [0.2.6] - Unreleased
+
+This is a local source candidate, not a GitHub or PyPI publication receipt.
+Earlier candidate labels and acceptance records below retain their recorded scope.
+
+### Fixed
+- Commit session response state in the receive loop before waking the pending
+  RPC caller, so valid updates that immediately follow initialization or
+  new/load/resume responses use the correct session. Preserve cancellation,
+  late-response and failed-transition ownership rules, including OpenCode's
+  custom initialization path; do not replay prompts or weaken foreign-session
+  rejection.
+- Redact the default exception display chain for terminal close, ACP reaping
+  and synchronous/asynchronous OpenCode termination failures. Preserve public
+  error types, original private diagnostic causes, cleanup ownership and retry
+  behavior; raw OSError paths remain available only through explicit private
+  diagnosis.
+- Make the non-text stream-activity timeout regression deterministic with
+  controlled events and virtual SDK time, including missing-activity and total
+  prompt-deadline controls; do not change production timeout behavior.
+- Bind pending config responses to their originating logical session, including
+  same-ID transitions and failed-transition rollback. Validate late responses
+  without overwriting another session; public config calls reject changed
+  ownership without retiring an otherwise healthy transport. Reject new config
+  requests during an active session transition before writing to the transport.
+
+### Security and Tooling
+- Update isolated CI uv bootstrapping to 0.13.7; preserve development and hook
+  security floors and audit the frozen dependency set across environment markers.
+- Check the frozen all-extras stack on Windows and Ubuntu with Python 3.12,
+  alongside the retained floating CPython 3.10–3.15 matrix. Explicitly deselect
+  provider integration tests for non-provider CI jobs and disable persisted
+  checkout credentials. Neither local CI reproduction nor configuration changes
+  imply that a hosted run or remote write occurred.
+- Harden ignore coverage for local credential, session and diagnostic artifacts
+  while keeping reviewed environment examples visible, and exclude the
+  documented `.venv-ci-tools/` environment.
+- Validate lock freshness before frozen synchronization and audit every locked
+  registry package/version across OS/Python markers. Treat incomplete audit
+  coverage, unsupported sources and audit failures as failures.
+- Fix audit subprocess output and cache destinations so inherited output settings
+  cannot overwrite files or migrate user caches. Reject skipped dependencies in
+  the minimum development and repository-hook audits as well.
+
+### Documentation
+- Align current source/version footers and guarded-build examples on 0.2.6;
+  preserve historical 0.2.5 records and publication distinctions.
+- Explain receive-ordered session transitions, Codex ACP native modes, frozen
+  CI reproduction and the distinct SoulBot framework, SoulRun executor and
+  SoulACP connector responsibilities in both READMEs.
 
 ## [0.2.5] - Unreleased
 

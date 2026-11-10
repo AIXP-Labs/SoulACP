@@ -15,6 +15,7 @@ MANIFEST
 # Virtual environments
 .venv/
 .venv-hooks/
+.venv-ci-tools/
 venv/
 ENV/
 env/
@@ -49,14 +50,39 @@ coverage.xml
 # Environment / secrets
 .env
 .env.*
-.env.local
-/sessions.json
-/examples/sessions.json
-/.soulacp/
-/auth.json
-/.pypirc
-/.codex/auth.json
-/.claude/settings.local.json
+!.env.example
+!.env.sample
+!.env.template
+sessions.json
+auth.json
+.credentials.json
+.claude.json
+.soulacp/
+.pypirc
+**/.codex/history.jsonl
+**/.codex/sessions/
+**/.codex/log/
+**/.claude/settings.local.json
+**/.claude/history.jsonl
+**/.claude/projects/
+**/.claude/debug/
+**/.claude/session-env/
+**/.aws/credentials
+**/.aws/sso/cache/
+
+# Reviewed synthetic fixtures stay visible; never put real credentials here.
+!tests/fixtures/auth.json
+!tests/fixtures/sessions.json
+
+# Private diagnostics and credential bundles
+*.dpapi
+*.har
+*.pcap
+*.pcapng
+*.p12
+*.pfx
+id_rsa
+id_ed25519
 
 # OS
 .DS_Store

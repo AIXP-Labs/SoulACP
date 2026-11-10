@@ -94,7 +94,7 @@ SoulACP follows Semantic Versioning:
 Pre-1.0 releases may refine APIs more quickly, but breaking changes still
 require explicit changelog and migration guidance.
 
-The current source target is **0.2.5**. A patch must preserve the documented
+The current source target is **0.2.6**. A patch must preserve the documented
 public API and safety policy. Source metadata, installed metadata, import
 location, distribution contents, and downstream lock files are separate
 identities to verify. Historical changelog entries retain their own versions;
@@ -142,6 +142,15 @@ floor or permission defaults. Matrix configuration is not a passing CI receipt;
 report exact source, platform, build and provider scopes separately. Preserve
 published 0.2.4 files and historical acceptance records.
 
+### 0.2.6 Local Verification and Privacy
+
+The 0.2.6 source target includes the receive-ordered session-state correction,
+private-cause handling for cleanup failures, and repository dependency/ignore
+hardening. It retains the Python 3.10 floor, standard-library runtime core,
+public error types and permission policy. Frozen dependency CI is distinct from
+the floating interpreter matrix; local reproduction is distinct from a hosted
+run or publication. Preserve the earlier 0.2.5 candidate's historical records.
+
 ## Axiom 0
 
 Human Sovereignty and Wellbeing is the project's immutable guiding constraint.
@@ -150,4 +159,4 @@ testable safety and compatibility contracts described above.
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.5. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.6. www.soulacp.dev

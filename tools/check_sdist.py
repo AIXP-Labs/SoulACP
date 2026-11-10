@@ -19,7 +19,12 @@ REQUIRED_INPUTS = frozenset(
         "tools/run_hooks.py",
         "tools/check_sdist.py",
         "tools/build_release.py",
+        "tools/audit_lock.py",
         "tests/test_dependency_policy.py",
+        "tests/test_lock_audit.py",
+        "tests/test_session_response_ordering.py",
+        "tests/test_opencode_response_ordering.py",
+        "tests/test_shutdown_exception_privacy.py",
     }
 )
 

@@ -72,6 +72,11 @@ PyYAML官方的`PYYAML_FORCE_LIBYAML=0`构建选项准备开发环境，因为�
 当前缺少匹配wheel。这只改变YAML工具的安装路径，Bandit和所有SDK断言仍执行。
 质量与最低依赖任务保留原解释器和安全版本下限。
 
+CI 显式选择 `-m "not integration"`；这些提供方用例记为 deselected，不能记为
+通过。除 Windows/Ubuntu 的 12 个浮动矩阵格外，两个平台还使用 Python 3.12
+检查冻结的 `uv.lock`。按 README 中的锁定栈命令使用修复后的 `uv 0.13.7`；
+不能仅因依赖锁未变就继续使用旧 uv 引导工具。
+
 现有语句/分支覆盖率门使用
 `python -m pytest tests/ -W error --cov=soulacp --cov-branch --cov-report=term`。
 `make check`只覆盖lint、类型与Bandit，不是完整CI；测试、hook、依赖审计和受控构建
@@ -115,7 +120,7 @@ Windows 使用 `py -3.11 -m venv .venv-hooks` 创建环境，将上述解释器�
 
 ### 发布身份与隐私
 
-当前源码目标为 **0.2.5**：
+当前源码目标为 **0.2.6**：
 
 1. 核对 `pyproject.toml`、`src/soulacp/meta.py`、`uv.lock` 中本项目条目、
    当前文档页脚和当前 CHANGELOG 条目。不要改写历史版本，也不要把日期当上传回执。
@@ -124,7 +129,7 @@ Windows 使用 `py -3.11 -m venv .venv-hooks` 创建环境，将上述解释器�
    `DIST_DIR`另选新目录。`make clean`仍是需显式选择的破坏性清理：
 
    ```bash
-   python tools/build_release.py --outdir dist/0.2.5
+   python tools/build_release.py --outdir dist/0.2.6
    # 或：make build DIST_DIR=dist/another-new-directory
    ```
 
@@ -180,4 +185,4 @@ Copyright 2026 AIXP Labs AIXP.dev | SoulACP.dev
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.5. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.6. www.soulacp.dev

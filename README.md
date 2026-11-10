@@ -42,6 +42,10 @@ English | [简体中文](README_CN.md)
 - **Current ACP lifecycle**: Capability-gated authentication, logout, session close, request cancellation, and config APIs
 - **Pure stdlib core**: No required runtime dependencies; the OpenTelemetry API is optional
 
+SoulBot provides the application framework, SoulRun executes AISOP programs and
+AISP skills, and SoulACP connects providers over ACP. Calling applications retain
+orchestration, tool authorization and business policy.
+
 ## Installation
 
 SoulACP requires Python 3.10 or later and at least one supported agent CLI or
@@ -63,7 +67,7 @@ pip install soulacp
 GitHub and PyPI releases use the same version and are published together.
 Use `python -m pip install soulacp` to select a Python interpreter explicitly.
 
-This checkout targets `0.2.5`, a local candidate until publication is recorded.
+This checkout targets `0.2.6`, a local candidate until publication is recorded.
 `pip install soulacp` installs the latest published release, not an unpublished
 checkout. A local deployment is not a PyPI publication receipt.
 
@@ -91,7 +95,7 @@ Check the interpreter, distribution metadata, and imported module together:
 python -c "import importlib.metadata as m, soulacp; print(m.version('soulacp')); print(soulacp.__version__)"
 ```
 
-Both values should be `0.2.5` when validating this checkout. Locally inspect
+Both values should be `0.2.6` when validating this checkout. Locally inspect
 `soulacp.__file__` if the values differ; redact personal paths before sharing
 diagnostics. Editable installs, wheels, and downstream lock files are distinct
 installation sources. Replacing files does not reload an already-running worker.
@@ -219,11 +223,11 @@ print("Installed:", installed)
 Install the current Claude and Codex ACP bridges with:
 
 ```bash
-npm install -g "@agentclientprotocol/claude-agent-acp@>=0.86.0" "@agentclientprotocol/codex-acp@>=2.1.1"
+npm install -g "@agentclientprotocol/claude-agent-acp@>=0.100.0" "@agentclientprotocol/codex-acp@>=2.5.0"
 ```
 
 Keep the quotes so the shell does not treat `>` as a redirect. These ranges
-match SoulACP 0.2.5's installation hints; they are not exact version pins or
+match SoulACP 0.2.6's installation hints; they are not exact version pins or
 qualification of every later bridge/model combination. A bridge can bundle its
 own CLI/runtime, so upgrading a global `claude` or `codex` alone does not prove
 which runtime the bridge will use. Check the bridge's installed package metadata
@@ -319,6 +323,12 @@ asyncio.run(main())
 | `CODEX_SANDBOX_MODE` | `read-only` / `workspace-write` / `danger-full-access` | (codex default) | File-system permission |
 | `CODEX_APPROVAL_POLICY` | `untrusted` / `on-request` / `never` | (Codex default) | Approval prompts |
 | `CODEX_NETWORK_ACCESS` | `true` / `1` / `yes` | not injected | Opt in to network in `workspace-write`; other values leave Codex config unchanged |
+
+Codex ACP 2.5 advertises native modes such as `read-only`, `workspace-write`,
+`agent` and `agent-full-access`. Inspect `session_mode_state` and select an
+advertised value with `set_mode()`; do not assume a `plan` mode is available.
+The `CODEX_SANDBOX_MODE` and `CODEX_APPROVAL_POLICY` overrides configure the native
+runtime separately. A mode name alone does not prove OS sandbox enforcement.
 
 An explicit `model_reasoning_effort` in `ACPConfig.extra_args` takes precedence;
 otherwise SoulACP reads `extra_env` and then the permitted parent environment.
@@ -549,7 +559,13 @@ current selection. Stable `session_info_update`, `usage_update`, and
 `available_commands_update` notifications are validated into `session_info`,
 `session_usage`, and `available_commands`. These five session-owned states are
 cleared together for a new/load/resume transition and restored together if the
-transition fails. Every stable ACP v1 session-update shape, including content
+transition fails. Session responses commit these states in the receive loop
+before waking the waiting RPC caller, so immediately following valid updates use
+the new session. Late or cancelled responses cannot revive an invalidated
+transition. `set_config_option()` binds its pending result to the original logical
+session, including same-ID reloads; a session change raises `ACPProtocolError`
+without applying that configuration to the current session. New configuration
+requests are rejected while a session transition is in progress. Every stable ACP v1 session-update shape, including content
 blocks, tool calls, and plans, is structurally validated before state mutation
 or callback delivery. `set_update_callback()` remains the raw, receive-ordered hook
 for every update, including tool calls, plans, and thought chunks that are not
@@ -1077,10 +1093,46 @@ PYTHONPATH=src python -m pyright --verifytypes soulacp --ignoreexternal
 python -m bandit -q -r src/soulacp
 
 # Build into a new, nonexistent output directory; do not mix historical releases
-python tools/build_release.py --outdir dist/0.2.5
-python -m twine check dist/0.2.5/soulacp-0.2.5-py3-none-any.whl dist/0.2.5/soulacp-0.2.5.tar.gz
-python tools/check_sdist.py dist/0.2.5/soulacp-0.2.5.tar.gz
+python tools/build_release.py --outdir dist/0.2.6
+python -m twine check dist/0.2.6/soulacp-0.2.6-py3-none-any.whl dist/0.2.6/soulacp-0.2.6.tar.gz
+python tools/check_sdist.py dist/0.2.6/soulacp-0.2.6.tar.gz
 ```
+
+CI selects non-provider tests with `-m "not integration"`, so integration cases
+are deselected rather than counted as passes. The floating test matrix retains
+12 Windows/Ubuntu and Python `3.10` through `3.15` combinations; the frozen-stack
+job separately checks Python `3.12` on both platforms using patched `uv 0.13.7`:
+
+```bash
+python3.12 -m venv .venv-ci-tools
+.venv-ci-tools/bin/python -m pip --isolated install "uv==0.13.7"
+.venv-ci-tools/bin/uv lock --no-config --check
+.venv-ci-tools/bin/uv sync --no-config --frozen --all-extras --python 3.12
+.venv-ci-tools/bin/uv pip check
+.venv-ci-tools/bin/uv run --no-config --frozen --all-extras pytest tests/ -W error -m "not integration" -q --cov=soulacp --cov-branch --cov-report=term
+```
+
+```powershell
+py -3.12 -m venv .venv-ci-tools
+.venv-ci-tools\Scripts\python.exe -m pip --isolated install "uv==0.13.7"
+.venv-ci-tools\Scripts\uv.exe lock --no-config --check
+.venv-ci-tools\Scripts\uv.exe sync --no-config --frozen --all-extras --python 3.12
+.venv-ci-tools\Scripts\uv.exe pip check
+.venv-ci-tools\Scripts\uv.exe run --no-config --frozen --all-extras pytest tests/ -W error -m "not integration" -q --cov=soulacp --cov-branch --cov-report=term
+```
+
+Select the isolated executable explicitly instead of an old global uv. Ubuntu
+needs the interpreter's venv/ensurepip support; a managed Python is also suitable.
+These tooling environments are separate from provider login profiles;
+`.venv-ci-tools/` is excluded from repository inputs.
+
+CI checks lock freshness before frozen synchronization. Its full-marker audit
+uses `python tools/audit_lock.py`, with `pip-audit==2.10.1` installed in that
+interpreter. It audits every locked registry package/version, including alternate
+OS/Python branches and multiple versions of one package; an incomplete response,
+unsupported source, audit failure or vulnerability fails the check. Audit
+subprocesses use explicit `stdout` and task-owned temporary caches, while
+minimum-stack audits also reject skipped dependencies.
 
 Repository hooks use the separate Python >=3.11
 [hook environment](CONTRIBUTING.md#repository-hook-environment). `make check`
@@ -1190,7 +1242,7 @@ This software is **experimental** and provided for **research and educational pu
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.5. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.6. www.soulacp.dev
 
 <a id="alignment-philosophy"></a>
 

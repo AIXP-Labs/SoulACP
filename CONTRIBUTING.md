@@ -77,6 +77,12 @@ extension currently lacks a matching wheel. This only changes YAML tooling's
 installation path; Bandit and all SDK assertions still run. The quality and
 minimum-dependency jobs keep their existing interpreters and security floors.
 
+CI explicitly selects `-m "not integration"`; those provider cases are
+deselected, not passed. In addition to the 12 floating Windows/Ubuntu matrix
+cells, Python 3.12 checks the frozen `uv.lock` on both platforms. Use patched
+`uv 0.13.7` for the same locked-stack commands documented in the README; do not
+reuse an older uv bootstrap merely because the dependency lock is unchanged.
+
 For the configured statement/branch coverage gate, run
 `python -m pytest tests/ -W error --cov=soulacp --cov-branch --cov-report=term`.
 `make check` covers lint, types and Bandit only; it is not a full CI run. Tests,
@@ -126,7 +132,7 @@ and session-cache locations, but are not a substitute for reviewing staged files
 
 ### Release Identity and Privacy
 
-For the current **0.2.5** source target:
+For the current **0.2.6** source target:
 
 1. Check `pyproject.toml`, `src/soulacp/meta.py`, the root `soulacp` entry in
    `uv.lock`, current documentation footers, and the current changelog entry.
@@ -137,7 +143,7 @@ For the current **0.2.5** source target:
    for a subsequent build. `make clean` remains an explicitly destructive action:
 
    ```bash
-   python tools/build_release.py --outdir dist/0.2.5
+   python tools/build_release.py --outdir dist/0.2.6
    # Alternatively: make build DIST_DIR=dist/another-new-directory
    ```
 
@@ -210,4 +216,4 @@ Copyright 2026 AIXP Labs AIXP.dev | SoulACP.dev
 
 ---
 
-Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.5. www.soulacp.dev
+Align Axiom 0: Human Sovereignty and Wellbeing. Version: SoulACP V0.2.6. www.soulacp.dev

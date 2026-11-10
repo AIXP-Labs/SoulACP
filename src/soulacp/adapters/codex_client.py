@@ -15,7 +15,7 @@ class CodexACPClient(ACPClientBase):
     """ACP client for OpenAI Codex via codex-acp adapter.
 
     Requires:
-        - codex-acp binary (``npm install -g "@agentclientprotocol/codex-acp@>=2.1.1"``)
+        - codex-acp binary (``npm install -g "@agentclientprotocol/codex-acp@>=2.5.0"``)
         - One of:
             (a) ``codex login`` (ChatGPT account auth — recommended,
                 exposes the models enabled for that account)
@@ -77,7 +77,7 @@ class CodexACPClient(ACPClientBase):
         binary = find_codex_binary()
         if not binary:
             raise FileNotFoundError(
-                'codex-acp not found. Install with: npm install -g "@agentclientprotocol/codex-acp@>=2.1.1"'
+                'codex-acp not found. Install with: npm install -g "@agentclientprotocol/codex-acp@>=2.5.0"'
             )
         cmd = [binary]
 

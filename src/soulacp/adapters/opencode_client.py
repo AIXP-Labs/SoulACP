@@ -25,7 +25,7 @@ from soulacp.adapters.base_client import (
     _finalize_rpc_future,
     _inject_otel_context_into_env,
     _otel_propagation_enabled,
-    _SessionStateSnapshot,
+    _RPCLifecycle,
     _validate_json_values,
 )
 from soulacp.binary import find_opencode_binary
@@ -305,7 +305,10 @@ class OpenCodeACPClient(ACPClientBase):
             except Exception as exc:
                 termination_error = exc
         if proc.poll() is None:
-            raise RuntimeError("OpenCode subprocess did not exit after terminate/kill") from termination_error
+            error = RuntimeError("OpenCode subprocess did not exit after terminate/kill")
+            if termination_error is not None:
+                _raise_private_cause(error, termination_error)
+            raise error from None
 
     async def _terminate_popen(self, proc: subprocess.Popen) -> None:
         failure: BaseException | None = None
@@ -321,7 +324,10 @@ class OpenCodeACPClient(ACPClientBase):
             while proc.poll() is None and time.monotonic() < deadline:
                 await asyncio.sleep(0.01)
         if proc.poll() is None:
-            raise RuntimeError("OpenCode subprocess did not exit after terminate/kill") from failure
+            error = RuntimeError("OpenCode subprocess did not exit after terminate/kill")
+            if failure is not None:
+                _raise_private_cause(error, failure)
+            raise error from None
         # Buffered pipe closing may block; only resource finalization uses the
         # executor, after physical exit is already observed independently.
         await asyncio.to_thread(self._terminate_popen_sync, proc)
@@ -396,13 +402,12 @@ class OpenCodeACPClient(ACPClientBase):
             self._pending[mid] = future
             self._inflight[mid] = (method, time.monotonic())
         prompt_write_started = False
-        transition_id: str | None = None
-        previous_session_state: _SessionStateSnapshot | None = None
+        lifecycle: _RPCLifecycle | None = None
         transition_succeeded = False
         request_write_started = False
         with self._otel_rpc_span(method, mid):
             try:
-                transition_id, previous_session_state = self._begin_rpc_lifecycle(method, params)
+                lifecycle = self._register_rpc_lifecycle(mid, method, params)
                 prompt_write_started = method == "session/prompt"
                 loop = asyncio.get_running_loop()
                 deadline = loop.time() + timeout
@@ -412,14 +417,18 @@ class OpenCodeACPClient(ACPClientBase):
                     self._explicit_auth_succeeded = False
                 await self._write_with_timeout(msg, timeout)
                 result = await self._await_rpc_future(future, deadline)
-                self._complete_rpc_lifecycle(method, result, transition_id)
+                self._apply_rpc_lifecycle(method, result, lifecycle)
                 transition_succeeded = True
             except asyncio.CancelledError:
+                if lifecycle is not None:
+                    lifecycle.abandoned = True
                 await self._notify_request_cancel(mid)
                 if request_write_started:
                     await self._invalidate_uncertain_rpc_transport(method)
                 raise
             except asyncio.TimeoutError as exc:
+                if lifecycle is not None:
+                    lifecycle.abandoned = True
                 await self._notify_request_cancel(mid)
                 if request_write_started:
                     await self._invalidate_uncertain_rpc_transport(method)
@@ -432,12 +441,16 @@ class OpenCodeACPClient(ACPClientBase):
                     _raise_private_cause(ACPAuthenticationError(), exc)
                 raise
             except ACPResponseError as exc:
+                if lifecycle is not None:
+                    lifecycle.abandoned = True
                 if request_write_started:
                     await self._invalidate_uncertain_rpc_transport(method)
                 if method == "authenticate" and self._auth_method_id is not None:
                     _raise_private_cause(ACPAuthenticationError(), exc)
                 raise
             except Exception as exc:
+                if lifecycle is not None:
+                    lifecycle.abandoned = True
                 if request_write_started:
                     await self._invalidate_uncertain_rpc_transport(method)
                 if prompt_write_started:
@@ -446,7 +459,7 @@ class OpenCodeACPClient(ACPClientBase):
                     _raise_private_cause(ACPAuthenticationError(), exc)
                 raise
             finally:
-                self._finish_rpc_lifecycle(transition_id, previous_session_state, transition_succeeded)
+                self._finish_pending_rpc(mid, lifecycle, transition_succeeded)
                 _finalize_rpc_future(future)
                 with self._pending_lock:
                     self._pending.pop(mid, None)
@@ -612,6 +625,7 @@ class OpenCodeACPClient(ACPClientBase):
                 bool(self.session_id),
             )
         self._connected = False
+        self._retire_rpc_lifecycles()
         with self._pending_lock:
             prompt_was_pending = any(method == "session/prompt" for method, _started in self._inflight.values())
             pending = list(self._pending.values())
@@ -662,6 +676,7 @@ class OpenCodeACPClient(ACPClientBase):
                 await asyncio.wait_for(self.cancel(), timeout=2.0)
         self._connected = False
 
+        self._retire_rpc_lifecycles()
         with self._pending_lock:
             pending = list(self._pending.values())
             self._pending.clear()
